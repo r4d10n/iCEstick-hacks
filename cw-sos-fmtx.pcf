@@ -1,0 +1,5 @@
+set_io clk 21
+set_io clkin 44
+set_io modout 87
+set_io lock 95
+
