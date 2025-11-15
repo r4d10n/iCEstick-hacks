@@ -1,0 +1,16 @@
+# Python dependencies for FM Audio Transmitter
+# Install with: pip install -r requirements.txt
+
+# Serial communication
+pyserial>=3.5
+
+# Audio processing
+pydub>=0.25.1
+
+# Numerical operations
+numpy>=1.21.0
+
+# Note: Also requires ffmpeg installed on system:
+#   Linux: sudo apt-get install ffmpeg
+#   macOS: brew install ffmpeg
+#   Windows: Download from https://ffmpeg.org/

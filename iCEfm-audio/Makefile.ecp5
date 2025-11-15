@@ -1,0 +1,90 @@
+# Makefile for Lattice ECP5 FPGA (e.g., ULX3S, OrangeCrab)
+# FM Audio Transmitter Project
+#
+# Usage:
+#   make -f Makefile.ecp5        # Build bitstream
+#   make -f Makefile.ecp5 prog   # Program FPGA
+#   make -f Makefile.ecp5 clean  # Clean build files
+
+# Project configuration
+PROJECT = fm_audio_ecp5
+TOP_MODULE = fm_audio_top
+LPF = pcf/ecp5.lpf
+
+# FPGA target (adjust for your board)
+DEVICE = 25k
+PACKAGE = CABGA381
+
+# Source files
+RTL_DIR = rtl
+SOURCES = $(RTL_DIR)/fm_audio_top.v \
+          $(RTL_DIR)/uart_rx.v \
+          $(RTL_DIR)/pll_wrapper.v \
+          $(RTL_DIR)/fm_transmitter.v \
+          $(RTL_DIR)/fifo.v
+
+# Build tools
+YOSYS = yosys
+NEXTPNR = nextpnr-ecp5
+ECPPACK = ecppack
+OPENOCD = openocd
+
+# Build outputs
+JSON = $(PROJECT).json
+CONFIG = $(PROJECT).config
+BIT = $(PROJECT).bit
+SVF = $(PROJECT).svf
+
+# Synthesis flags
+YOSYS_FLAGS = -p 'synth_ecp5 -top $(TOP_MODULE) -json $(JSON)'
+YOSYS_DEFINES = -D FPGA_ECP5
+
+# Place and route flags
+NEXTPNR_FLAGS = --$(DEVICE) --package $(PACKAGE) --lpf $(LPF) --json $(JSON) --textcfg $(CONFIG)
+
+# Pack flags
+ECPPACK_FLAGS = --compress --svf $(SVF)
+
+# Default target
+all: $(BIT) $(SVF)
+
+# Synthesis
+$(JSON): $(SOURCES)
+	@echo "Synthesizing design for ECP5..."
+	$(YOSYS) $(YOSYS_DEFINES) $(YOSYS_FLAGS) $(SOURCES)
+
+# Place and route
+$(CONFIG): $(JSON) $(LPF)
+	@echo "Place and route (using nextpnr-ecp5)..."
+	$(NEXTPNR) $(NEXTPNR_FLAGS)
+
+# Generate bitstream
+$(BIT): $(CONFIG)
+	@echo "Generating bitstream..."
+	$(ECPPACK) $(ECPPACK_FLAGS) $(CONFIG) $(BIT)
+
+# Generate SVF for programming
+$(SVF): $(BIT)
+	@echo "SVF file generated: $(SVF)"
+
+# Program FPGA via OpenOCD (for ULX3S and similar boards)
+prog: $(SVF)
+	@echo "Programming FPGA via OpenOCD..."
+	$(OPENOCD) -f /usr/share/trellis/misc/openocd/ecp5-evn.cfg -c "transport select jtag; init; svf $(SVF); exit"
+
+# Alternative: Program using fujprog (for ULX3S)
+prog-fujprog: $(BIT)
+	@echo "Programming FPGA via fujprog..."
+	fujprog $(BIT)
+
+# Clean build files
+clean:
+	rm -f $(JSON) $(CONFIG) $(BIT) $(SVF)
+
+# Show resource usage
+show-usage: $(CONFIG)
+	@echo "=== Resource Usage ==="
+	@grep -A 20 "Device utilisation" $(CONFIG) || true
+
+# Phony targets
+.PHONY: all prog prog-fujprog clean show-usage

@@ -1,0 +1,92 @@
+# Makefile for iCE40-HX8K FPGA (e.g., iCEstick, BlackIce)
+# FM Audio Transmitter Project
+#
+# Usage:
+#   make -f Makefile.ice40hx8k        # Build bitstream
+#   make -f Makefile.ice40hx8k prog   # Program FPGA
+#   make -f Makefile.ice40hx8k clean  # Clean build files
+
+# Project configuration
+PROJECT = fm_audio_hx8k
+TOP_MODULE = fm_audio_top
+PCF = pcf/ice40hx8k.pcf
+
+# FPGA target
+DEVICE = hx8k
+PACKAGE = ct256
+
+# Source files
+RTL_DIR = rtl
+SOURCES = $(RTL_DIR)/fm_audio_top.v \
+          $(RTL_DIR)/uart_rx.v \
+          $(RTL_DIR)/pll_wrapper.v \
+          $(RTL_DIR)/fm_transmitter.v \
+          $(RTL_DIR)/fifo.v
+
+# Build tools
+YOSYS = yosys
+ARACHNE = arachne-pnr
+ICEPACK = icepack
+ICETIME = icetime
+ICEPROG = iceprog
+
+# Build outputs
+BLIF = $(PROJECT).blif
+ASC = $(PROJECT).asc
+BIN = $(PROJECT).bin
+RPT = $(PROJECT).rpt
+
+# Synthesis flags
+YOSYS_FLAGS = -p 'synth_ice40 -top $(TOP_MODULE) -blif $(BLIF) -json $(PROJECT).json'
+YOSYS_DEFINES = -D FPGA_ICE40HX
+
+# Place and route flags
+ARACHNE_FLAGS = -d $(DEVICE) -P $(PACKAGE) -p $(PCF)
+
+# Timing analysis flags
+ICETIME_FLAGS = -d $(DEVICE) -P $(PACKAGE) -r $(RPT)
+
+# Default target
+all: $(BIN) $(RPT)
+
+# Synthesis
+$(BLIF): $(SOURCES)
+	@echo "Synthesizing design for iCE40-HX8K..."
+	$(YOSYS) $(YOSYS_DEFINES) $(YOSYS_FLAGS) $(SOURCES)
+
+# Place and route
+$(ASC): $(BLIF) $(PCF)
+	@echo "Place and route..."
+	$(ARACHNE) $(ARACHNE_FLAGS) -o $(ASC) $(BLIF)
+
+# Generate bitstream
+$(BIN): $(ASC)
+	@echo "Generating bitstream..."
+	$(ICEPACK) $(ASC) $(BIN)
+
+# Timing analysis
+$(RPT): $(ASC)
+	@echo "Running timing analysis..."
+	$(ICETIME) $(ICETIME_FLAGS) $(ASC)
+
+# Program FPGA
+prog: $(BIN)
+	@echo "Programming FPGA..."
+	$(ICEPROG) $(BIN)
+
+# Program with sudo (if needed)
+sudo-prog: $(BIN)
+	@echo "Programming FPGA (with sudo)..."
+	sudo $(ICEPROG) $(BIN)
+
+# Clean build files
+clean:
+	rm -f $(BLIF) $(ASC) $(BIN) $(RPT) $(PROJECT).json
+
+# Show resource usage
+show-usage: $(RPT)
+	@echo "=== Resource Usage ==="
+	@grep -A 10 "Device utilisation" $(RPT) || true
+
+# Phony targets
+.PHONY: all prog sudo-prog clean show-usage

@@ -1,0 +1,52 @@
+# Pin Constraint File for iCE40-UP5K (UPduino v3.0 / iCEBreaker)
+# FM Audio Transmitter Project
+#
+# This file provides pin assignments for common UP5K development boards
+# Uncomment the section that matches your board
+#
+# Supported boards:
+#   - UPduino v3.0
+#   - iCEBreaker
+#   - Other UP5K boards (adjust pins accordingly)
+
+#---------------------------------------------------------------------------
+# UPduino v3.0 Pin Assignments
+#---------------------------------------------------------------------------
+
+# Clock input (12 MHz onboard oscillator)
+set_io clk_in 35
+
+# Reset (active low) - Use button or GPIO
+set_io rst_n 10
+
+# UART Interface (using GPIO pins)
+set_io uart_rx 12
+
+# FM Antenna Output
+set_io antenna 21
+
+# Status LEDs (UPduino has RGB LED, using separate channels)
+set_io led_locked 41      # Red channel
+set_io led_configured 40  # Green channel
+set_io led_active 39      # Blue channel
+
+#---------------------------------------------------------------------------
+# iCEBreaker Pin Assignments (Alternative - comment out UPduino section above)
+#---------------------------------------------------------------------------
+
+# Uncomment for iCEBreaker board:
+# set_io clk_in 35
+# set_io rst_n 10
+# set_io uart_rx 6
+# set_io antenna 9
+# set_io led_locked 11
+# set_io led_configured 37
+# set_io led_active 38
+
+#---------------------------------------------------------------------------
+# Notes
+#---------------------------------------------------------------------------
+# - Antenna wire: 10-15 cm for testing, ~75 cm for quarter-wave at 100 MHz
+# - RGB LED pins may need external resistors depending on board
+# - For UART, ensure voltage levels match (3.3V for UP5K)
+# - Always verify pin assignments with your board schematic

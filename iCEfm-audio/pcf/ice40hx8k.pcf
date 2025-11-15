@@ -1,0 +1,39 @@
+# Pin Constraint File for iCE40-HX8K (iCEstick Board)
+# FM Audio Transmitter Project
+#
+# iCEstick pin assignments:
+#   - 12 MHz onboard oscillator
+#   - UART via FTDI USB-Serial (or GPIO pins)
+#   - LEDs for status indication
+#   - Antenna output on GPIO
+#
+# NOTE: Adjust pin numbers based on your specific board layout
+
+# Clock input (12 MHz oscillator on iCEstick)
+set_io clk_in 21
+
+# Reset (active low) - Use button or tie to VCC
+# Pin 44 is PMOD connector pin, can be used as reset button
+set_io rst_n 44
+
+# UART Interface
+# RX pin - receives data from PC
+# Using FTDI chip pins or GPIO pins depending on board configuration
+# For iCEstick, PMOD pins can be used
+set_io uart_rx 62
+
+# FM Antenna Output
+# Connect a wire to this pin as antenna (10-15 cm for FM band)
+set_io antenna 87
+
+# Status LEDs
+# iCEstick has 5 onboard LEDs (D1-D5)
+set_io led_locked 95      # LED D1 - PLL lock indicator
+set_io led_configured 96  # LED D2 - Configuration complete
+set_io led_active 97      # LED D3 - Audio streaming active
+
+# Additional notes:
+# - Antenna wire length: ~75cm for quarter-wave at 100MHz
+# - For better signal, use 10-15cm wire for near-field testing
+# - NEVER use long antenna without proper RF shielding
+# - This is for educational/testing purposes only

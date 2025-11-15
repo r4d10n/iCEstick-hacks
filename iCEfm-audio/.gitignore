@@ -1,0 +1,38 @@
+# FPGA build artifacts
+*.blif
+*.asc
+*.bin
+*.rpt
+*.json
+*.config
+*.bit
+*.svf
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+*.wav
+*.mp3
+*.flac
+test_audio/

@@ -1,0 +1,73 @@
+# Lattice Preference File for ECP5 FPGA (ULX3S / OrangeCrab)
+# FM Audio Transmitter Project
+#
+# This file provides pin assignments and constraints for ECP5 boards
+# Uncomment the section that matches your board
+#
+# Supported boards:
+#   - ULX3S (12F/25F/45F/85F)
+#   - OrangeCrab
+#   - Other ECP5 boards (adjust pins accordingly)
+
+#---------------------------------------------------------------------------
+# ULX3S Pin Assignments (85F version)
+#---------------------------------------------------------------------------
+
+# Clock input (25 MHz onboard oscillator)
+LOCATE COMP "clk_in" SITE "G2";
+IOBUF PORT "clk_in" IO_TYPE=LVCMOS33;
+FREQUENCY PORT "clk_in" 25.0 MHZ;
+
+# Reset (active low) - Button or GPIO
+LOCATE COMP "rst_n" SITE "R1";
+IOBUF PORT "rst_n" IO_TYPE=LVCMOS33 PULLMODE=UP;
+
+# UART Interface (FTDI USB-Serial)
+LOCATE COMP "uart_rx" SITE "L4";
+IOBUF PORT "uart_rx" IO_TYPE=LVCMOS33;
+
+# FM Antenna Output (use GPIO pin)
+LOCATE COMP "antenna" SITE "B11";
+IOBUF PORT "antenna" IO_TYPE=LVCMOS33 DRIVE=12;
+
+# Status LEDs
+LOCATE COMP "led_locked" SITE "B2";        # LED 0
+LOCATE COMP "led_configured" SITE "C2";    # LED 1
+LOCATE COMP "led_active" SITE "C1";        # LED 2
+IOBUF PORT "led_locked" IO_TYPE=LVCMOS33;
+IOBUF PORT "led_configured" IO_TYPE=LVCMOS33;
+IOBUF PORT "led_active" IO_TYPE=LVCMOS33;
+
+#---------------------------------------------------------------------------
+# OrangeCrab Pin Assignments (Alternative)
+#---------------------------------------------------------------------------
+
+# Uncomment for OrangeCrab board:
+# LOCATE COMP "clk_in" SITE "A9";
+# IOBUF PORT "clk_in" IO_TYPE=LVCMOS33;
+# FREQUENCY PORT "clk_in" 48.0 MHZ;
+#
+# LOCATE COMP "rst_n" SITE "J2";
+# IOBUF PORT "rst_n" IO_TYPE=LVCMOS33 PULLMODE=UP;
+#
+# LOCATE COMP "uart_rx" SITE "N17";
+# IOBUF PORT "uart_rx" IO_TYPE=LVCMOS33;
+#
+# LOCATE COMP "antenna" SITE "N16";
+# IOBUF PORT "antenna" IO_TYPE=LVCMOS33 DRIVE=12;
+#
+# LOCATE COMP "led_locked" SITE "K4";
+# LOCATE COMP "led_configured" SITE "M3";
+# LOCATE COMP "led_active" SITE "J3";
+# IOBUF PORT "led_locked" IO_TYPE=LVCMOS33;
+# IOBUF PORT "led_configured" IO_TYPE=LVCMOS33;
+# IOBUF PORT "led_active" IO_TYPE=LVCMOS33;
+
+#---------------------------------------------------------------------------
+# Notes
+#---------------------------------------------------------------------------
+# - Check your board documentation for exact pin assignments
+# - ULX3S uses 25 MHz clock, adjust INPUT_FREQ_MHZ parameter accordingly
+# - OrangeCrab uses 48 MHz clock
+# - DRIVE parameter controls output strength (4/8/12/16 mA)
+# - For antenna output, higher drive strength may improve range
