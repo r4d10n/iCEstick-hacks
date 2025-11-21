@@ -9,8 +9,42 @@ GlobalFoundries GF180MCU process.
 - **No PLL Required**: Output frequency derived directly from input clock
 - **Architecture Independent**: Pure behavioral Verilog, no vendor primitives
 - **Self-Contained**: Melody stored in synthesizable ROM (no external memory)
-- **Configurable**: Tempo, carrier frequency, and FM deviation are parameterized
+- **Dual Outputs**: Both FM (RF) and audio (speaker) outputs
+- **5 Configuration Pins**: Hardware jumpers for runtime settings
+- **Variable Tempo**: 4 speed settings (60/120/180/240 BPM)
 - **Single Clock Domain**: Simplifies timing closure for ASIC
+
+## Configuration Pins
+
+The design includes 5 configuration pins that can be connected to jumpers or a DIP switch:
+
+| Pin | Function | Settings |
+|-----|----------|----------|
+| cfg[0] | Loop Enable | 0=Play once, 1=Loop continuously |
+| cfg[2:1] | Tempo | 00=60 BPM, 01=120 BPM, 10=180 BPM, 11=240 BPM |
+| cfg[3] | Audio Enable | 0=Off, 1=Enable speaker output |
+| cfg[4] | FM Enable | 0=Off, 1=Enable RF output |
+
+### Recommended Configurations
+
+| cfg[4:0] | Description |
+|----------|-------------|
+| `5'b01011` | Audio test: Loop + 120 BPM + Audio only |
+| `5'b10011` | FM test: Loop + 120 BPM + FM only |
+| `5'b11011` | Full demo: Loop + 120 BPM + Both outputs |
+| `5'b11111` | Fast demo: Loop + 240 BPM + Both outputs |
+
+## Dual Output System
+
+### FM Output (fm_out)
+- RF frequency around clock/4 (e.g., 25 MHz with 100 MHz clock)
+- Notes encoded as FM frequency deviation
+- Requires antenna wire for reception
+
+### Audio Output (audio_out)
+- Actual musical note frequencies (261-659 Hz for Für Elise)
+- Square wave suitable for piezo buzzer or speaker
+- Direct GPIO connection to audio transducer
 
 ## Quick Start
 
@@ -123,16 +157,17 @@ fur_elise_fm_top
 
 ## Pin Description
 
-| Pin         | Dir | Width | Description                    |
-|-------------|-----|-------|--------------------------------|
-| clk         | in  | 1     | System clock                   |
-| rst_n       | in  | 1     | Active-low asynchronous reset  |
-| enable      | in  | 1     | Enable melody playback         |
-| loop        | in  | 1     | Loop melody continuously       |
-| fm_out      | out | 1     | FM modulated output            |
-| playing     | out | 1     | Melody currently playing       |
-| melody_end  | out | 1     | Pulse at end of melody         |
-| note_index  | out | 7     | Current note index (debug)     |
+| Pin         | Dir | Width | Description                      |
+|-------------|-----|-------|----------------------------------|
+| clk         | in  | 1     | System clock                     |
+| rst_n       | in  | 1     | Active-low asynchronous reset    |
+| cfg         | in  | 5     | Configuration jumpers (see above)|
+| enable      | in  | 1     | Enable/start melody playback     |
+| fm_out      | out | 1     | FM modulated RF output           |
+| audio_out   | out | 1     | Audio frequency output (speaker) |
+| playing     | out | 1     | Melody currently playing         |
+| melody_end  | out | 1     | Pulse at end of melody           |
+| note_index  | out | 7     | Current note index (debug)       |
 
 ## Resource Estimates
 
@@ -151,7 +186,8 @@ fur-elise-fm/
 │   ├── fur_elise_fm_top.v      # Top-level integration
 │   ├── melody_rom.v            # Note sequence ROM
 │   ├── melody_sequencer.v      # Playback timing
-│   └── fm_modulator.v          # DDS + frequency conversion
+│   ├── fm_modulator.v          # DDS + frequency conversion
+│   └── audio_tone_generator.v  # Audio frequency output
 ├── tb/
 │   └── fur_elise_fm_tb.v       # Comprehensive testbench
 ├── constraints/
