@@ -1,0 +1,100 @@
+# Tiny Tapeout project information
+yaml_version: 6
+
+# Project metadata
+project:
+  title: "Fur Elise FM Transmitter"
+  author: "iCEstick-hacks"
+  discord: ""
+  description: "FM transmitter playing Beethoven's Fur Elise melody via DDS"
+  language: "Verilog"
+  clock_hz: 50000000  # 50 MHz
+
+# How many tiles your design occupies
+tiles: "1x1"
+
+# Your top module name (must start with "tt_um_")
+top_module: "tt_um_fur_elise_fm"
+
+# Source files
+source_files:
+  - "project.v"
+  - "fur_elise_fm_top.v"
+  - "melody_rom.v"
+  - "melody_sequencer.v"
+  - "fm_modulator.v"
+  - "audio_tone_generator.v"
+  - "clock_doubler.v"
+  - "pwm_input_decoder.v"
+
+# Pinout for TinyTapeout
+pinout:
+  # Inputs
+  ui[0]: "enable"
+  ui[1]: "loop"
+  ui[2]: "clk_2x_enable"
+  ui[3]: "pwm_in"
+  ui[4]: "reserved"
+  ui[5]: "reserved"
+  ui[6]: "reserved"
+  ui[7]: "reserved"
+
+  # Outputs
+  uo[0]: "fm_out"
+  uo[1]: "audio_out"
+  uo[2]: "playing"
+  uo[3]: "melody_end"
+  uo[4]: "note_index[0]"
+  uo[5]: "note_index[1]"
+  uo[6]: "note_index[2]"
+  uo[7]: "note_index[3]"
+
+  # Bidirectional (configured as outputs)
+  uio[0]: "phase_inc[24]"
+  uio[1]: "phase_inc[25]"
+  uio[2]: "phase_inc[26]"
+  uio[3]: "phase_inc[27]"
+  uio[4]: "phase_inc[28]"
+  uio[5]: "phase_inc[29]"
+  uio[6]: "phase_inc[30]"
+  uio[7]: "phase_inc[31]"
+
+# Documentation
+documentation:
+  inputs: |
+    - ui[0]: Enable playback (active high)
+    - ui[1]: Loop melody continuously
+    - ui[2]: Enable clock doubling for higher FM frequency
+    - ui[3]: External PWM audio input for FM transmission
+    - ui[7:4]: Reserved (active low)
+
+  outputs: |
+    - uo[0]: FM modulated RF output (~12.5 MHz carrier at 50 MHz clock)
+    - uo[1]: Audio frequency output for direct speaker connection
+    - uo[2]: Playing indicator (high during playback)
+    - uo[3]: Melody end pulse
+    - uo[7:4]: Note index lower 4 bits (debug)
+
+  bidirectional: |
+    - uio[7:0]: Phase increment MSB byte (debug output)
+    All configured as outputs.
+
+  how_it_works: |
+    This design implements a Direct Digital Synthesis (DDS) based FM transmitter
+    that plays Beethoven's "Fur Elise" melody. A 32-bit phase accumulator generates
+    the carrier frequency, with the phase increment modulated by musical notes
+    encoded as semitone offsets from A4 (440 Hz).
+
+    Features:
+    - 82-note melody stored in synthesizable ROM
+    - Optional clock doubling using XOR-based edge detection
+    - External PWM audio input for FM transmission
+    - Audio frequency output for direct speaker connection
+
+  how_to_test: |
+    1. Connect fm_out to an antenna or spectrum analyzer
+    2. Set enable (ui[0]) high to start playback
+    3. Set loop (ui[1]) high for continuous playback
+    4. Optionally enable clock doubling (ui[2]) for higher carrier frequency
+    5. Connect speaker to audio_out for audible melody
+    6. Monitor phase_inc on uio[7:0] for debugging
