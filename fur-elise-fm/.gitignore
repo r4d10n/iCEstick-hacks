@@ -1,0 +1,20 @@
+# Build outputs
+build/
+*.vcd
+*.vvp
+
+# Synthesis outputs
+*_synth.v
+*.blif
+*.json
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
