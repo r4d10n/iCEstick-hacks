@@ -10,41 +10,64 @@ GlobalFoundries GF180MCU process.
 - **Architecture Independent**: Pure behavioral Verilog, no vendor primitives
 - **Self-Contained**: Melody stored in synthesizable ROM (no external memory)
 - **Dual Outputs**: Both FM (RF) and audio (speaker) outputs
-- **5 Configuration Pins**: Hardware jumpers for runtime settings
-- **Variable Tempo**: 4 speed settings (60/120/180/240 BPM)
+- **PWM Audio Input**: External audio via PWM for FM transmission
+- **Clock Doubling**: XOR-based frequency doubling (jumper controlled)
+- **Phase Increment Output**: 32-bit debug output for monitoring
 - **Single Clock Domain**: Simplifies timing closure for ASIC
 
-## Configuration Pins
+## Operating Modes
 
-The design includes 5 configuration pins that can be connected to jumpers or a DIP switch:
+### 1. Melody Mode (Default)
+When no PWM input is active, the design plays the built-in Für Elise melody:
+- FM output modulated with musical note frequencies
+- Audio output generates actual note frequencies for speaker
 
-| Pin | Function | Settings |
-|-----|----------|----------|
-| cfg[0] | Loop Enable | 0=Play once, 1=Loop continuously |
-| cfg[2:1] | Tempo | 00=60 BPM, 01=120 BPM, 10=180 BPM, 11=240 BPM |
-| cfg[3] | Audio Enable | 0=Off, 1=Enable speaker output |
-| cfg[4] | FM Enable | 0=Off, 1=Enable RF output |
+### 2. PWM Input Mode
+When external PWM audio is detected, it automatically switches to FM transmit mode:
+- PWM duty cycle decoded to audio sample
+- Sample modulates FM carrier frequency
+- Melody continues playing on audio_out (independent)
 
-### Recommended Configurations
+## Clock Doubling
 
-| cfg[4:0] | Description |
-|----------|-------------|
-| `5'b01011` | Audio test: Loop + 120 BPM + Audio only |
-| `5'b10011` | FM test: Loop + 120 BPM + FM only |
-| `5'b11011` | Full demo: Loop + 120 BPM + Both outputs |
-| `5'b11111` | Fast demo: Loop + 240 BPM + Both outputs |
+The design includes optional clock doubling using XOR-based edge detection:
 
-## Dual Output System
+- **Enabled via `clk_2x_enable` jumper**
+- Doubles the effective clock frequency for FM modulator
+- With 100 MHz input: FM carrier can reach ~50 MHz (instead of ~25 MHz)
+- Uses delay chain for pulse generation (technology dependent)
 
-### FM Output (fm_out)
-- RF frequency around clock/4 (e.g., 25 MHz with 100 MHz clock)
-- Notes encoded as FM frequency deviation
-- Requires antenna wire for reception
+```
+clk:         ____/‾‾‾‾\____/‾‾‾‾\____
+clk_doubled: ____/\__/\__/\__/\__/\__  (pulses at each edge)
+```
 
-### Audio Output (audio_out)
-- Actual musical note frequencies (261-659 Hz for Für Elise)
-- Square wave suitable for piezo buzzer or speaker
-- Direct GPIO connection to audio transducer
+## Pin Description
+
+| Pin           | Dir | Width | Description                      |
+|---------------|-----|-------|----------------------------------|
+| clk           | in  | 1     | System clock (~100 MHz)          |
+| rst_n         | in  | 1     | Active-low asynchronous reset    |
+| enable        | in  | 1     | Enable playback/transmission     |
+| loop          | in  | 1     | Loop melody continuously         |
+| clk_2x_enable | in  | 1     | Enable clock doubling (jumper)   |
+| pwm_in        | in  | 1     | External PWM audio input         |
+| fm_out        | out | 1     | FM modulated RF output           |
+| audio_out     | out | 1     | Audio frequency output (speaker) |
+| phase_inc_out | out | 32    | Phase increment (debug/monitor)  |
+| playing       | out | 1     | Melody currently playing         |
+| melody_end    | out | 1     | Pulse at end of melody           |
+| note_index    | out | 7     | Current note index (debug)       |
+
+## PWM Input Specification
+
+- Expected PWM frequency: ~50 kHz (configurable)
+- Duty cycle encoding:
+  - 0% = Minimum audio level
+  - 50% = Zero (center)
+  - 100% = Maximum audio level
+- Auto-detection: PWM activity triggers mode switch
+- Timeout: Returns to melody mode when PWM stops
 
 ## Quick Start
 
@@ -184,10 +207,12 @@ For GF180MCU (180nm):
 fur-elise-fm/
 ├── rtl/
 │   ├── fur_elise_fm_top.v      # Top-level integration
-│   ├── melody_rom.v            # Note sequence ROM
-│   ├── melody_sequencer.v      # Playback timing
-│   ├── fm_modulator.v          # DDS + frequency conversion
-│   └── audio_tone_generator.v  # Audio frequency output
+│   ├── melody_rom.v            # Note sequence ROM (Für Elise)
+│   ├── melody_sequencer.v      # Playback timing control
+│   ├── fm_modulator.v          # DDS phase accumulator
+│   ├── audio_tone_generator.v  # Audio frequency output
+│   ├── clock_doubler.v         # XOR-based clock frequency doubler
+│   └── pwm_input_decoder.v     # PWM to audio sample converter
 ├── tb/
 │   └── fur_elise_fm_tb.v       # Comprehensive testbench
 ├── constraints/
