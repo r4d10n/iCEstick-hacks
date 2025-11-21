@@ -39,7 +39,7 @@
 //-----------------------------------------------------------------------------
 
 module melody_sequencer #(
-    parameter CLOCKS_PER_16TH = 12_500_000,  // Clock cycles per 16th note
+    parameter CLOCKS_PER_16TH = 12_500_000,  // Default clock cycles per 16th note
     parameter MELODY_LENGTH   = 82,          // Number of notes in melody
     parameter ADDR_WIDTH      = 7            // log2(max melody length)
 )(
@@ -47,6 +47,8 @@ module melody_sequencer #(
     input  wire                    rst_n,
     input  wire                    enable,      // Enable playback
     input  wire                    loop,        // Loop at end of melody
+    input  wire [31:0]             tempo_clocks,// Runtime tempo (clocks per 16th)
+                                               // If 0, uses CLOCKS_PER_16TH parameter
     input  wire [15:0]             note_data,   // Data from melody ROM
     output reg  [ADDR_WIDTH-1:0]   note_addr,   // Address to melody ROM
     output reg  signed [7:0]       note_pitch,  // Current note pitch
@@ -110,7 +112,9 @@ module melody_sequencer #(
     wire [4:0] dur_mult = duration_multiplier(note_duration);
 
     // Calculate target duration in clock cycles
-    assign target_duration = CLOCKS_PER_16TH * dur_mult;
+    // Use runtime tempo if provided, otherwise use parameter default
+    wire [31:0] active_tempo = (tempo_clocks != 32'd0) ? tempo_clocks : CLOCKS_PER_16TH;
+    assign target_duration = active_tempo * dur_mult;
 
     // Duration complete when counter reaches target
     assign duration_done = (duration_counter >= target_duration - 1);

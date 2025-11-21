@@ -2,14 +2,9 @@
 // Module: fur_elise_fm_top
 //
 // Description:
-//   Top-level module for the Für Elise FM transmitter. Integrates the melody
-//   ROM, sequencer, frequency converter, and FM modulator to create a
-//   self-contained musical FM transmitter.
-//
-// Design Overview:
-//   This design generates an FM-modulated signal that plays Beethoven's
-//   "Für Elise" melody. The output can be received on an FM radio tuned
-//   to a frequency determined by the input clock and BASE_PHASE_INCREMENT.
+//   Top-level module for the Für Elise FM transmitter with configurable
+//   options via 5 hardware jumper pins. Includes both FM RF output and
+//   audio-frequency PWM output for direct speaker connection.
 //
 // Architecture:
 //
@@ -17,30 +12,53 @@
 //   | melody_rom  |---->| sequencer  |---->| note_to_phase_   |
 //   | (82 notes)  |     | (timing)   |     | increment        |
 //   +-------------+     +------------+     +------------------+
-//                                                  |
-//                                                  v
-//                                          +-------------+
-//                                          | fm_modulator|---> fm_out
-//                                          | (32-bit DDS)|
-//                                          +-------------+
+//                              |                   |
+//                              |                   v
+//                              |           +-------------+
+//                              |           | fm_modulator|---> fm_out
+//                              |           | (RF DDS)    |
+//                              |           +-------------+
+//                              |
+//                              +---------> +---------------+
+//                                          | audio_tone_   |---> audio_out
+//                                          | generator     |
+//                                          +---------------+
 //
-// Frequency Calculation:
-//   Since there is NO PLL, the output frequency is determined by:
+// Configuration Pins (Active High, directly readable from jumpers/DIP switch):
 //
-//     center_freq = (BASE_PHASE_INCREMENT / 2^32) × clk_freq
+//   +------+------------------+-------------------------------------------+
+//   | Pin  | Function         | Description                               |
+//   +------+------------------+-------------------------------------------+
+//   | [0]  | Loop Enable      | 0 = Play once and stop                    |
+//   |      |                  | 1 = Loop continuously                     |
+//   +------+------------------+-------------------------------------------+
+//   | [2:1]| Tempo Select     | 00 = Slow     (60 BPM,  ~40 sec melody)   |
+//   |      |                  | 01 = Normal   (120 BPM, ~20 sec melody)   |
+//   |      |                  | 10 = Fast     (180 BPM, ~13 sec melody)   |
+//   |      |                  | 11 = Allegro  (240 BPM, ~10 sec melody)   |
+//   +------+------------------+-------------------------------------------+
+//   | [3]  | Audio Enable     | 0 = Audio output disabled                 |
+//   |      |                  | 1 = Audio output enabled (speaker/buzzer) |
+//   +------+------------------+-------------------------------------------+
+//   | [4]  | FM Enable        | 0 = FM output disabled                    |
+//   |      |                  | 1 = FM output enabled (RF transmission)   |
+//   +------+------------------+-------------------------------------------+
 //
-//   Example configurations:
+// Default Configuration (all jumpers open/low):
+//   - Single play (no loop)
+//   - Slow tempo (60 BPM)
+//   - Audio disabled
+//   - FM disabled
+//   - Use 'enable' pin to start playback
 //
-//   | Clock (MHz) | BASE_PHASE_INCREMENT | Center Freq (MHz) |
-//   |-------------|----------------------|-------------------|
-//   | 100         | 0x40000000           | 25.0              |
-//   | 50          | 0x40000000           | 12.5              |
-//   | 10          | 0x40000000           | 2.5               |
-//   | 100         | 0x20000000           | 12.5              |
-//   | 100         | 0x80000000           | 50.0              |
+// Recommended Test Configuration:
+//   - cfg[4:0] = 5'b01010 → Loop, Normal tempo, Audio enabled, FM disabled
+//   - cfg[4:0] = 5'b10011 → Loop, Normal tempo, Audio disabled, FM enabled
+//   - cfg[4:0] = 5'b11011 → Loop, Normal tempo, Both outputs enabled
 //
-//   Musical notes are FM-modulated around this center frequency.
-//   DEVIATION_PER_SEMITONE controls how much frequency changes per note.
+// Frequency Notes:
+//   - FM output: ~clk/4 carrier with note modulation (MHz range)
+//   - Audio output: Actual note frequencies (261-659 Hz for Für Elise)
 //
 // Target Technology:
 //   - GlobalFoundries GF180MCU (180nm ASIC)
@@ -54,52 +72,28 @@
 
 module fur_elise_fm_top #(
     //-------------------------------------------------------------------------
-    // Timing Parameters
+    // Clock Frequency (needed for audio tone generation)
     //-------------------------------------------------------------------------
-    // CLOCKS_PER_16TH: Number of clock cycles per 16th note
-    // This controls the tempo of the melody.
-    //
-    // Formula: CLOCKS_PER_16TH = clk_freq / (BPM / 60 * 4)
-    //
-    // Examples:
-    //   100 MHz, 120 BPM: 100M / (120/60*4) = 100M / 8 = 12,500,000
-    //   50 MHz,  120 BPM: 50M / 8 = 6,250,000
-    //   10 MHz,  120 BPM: 10M / 8 = 1,250,000
-    //
-    parameter CLOCKS_PER_16TH = 12_500_000,
+    parameter CLK_FREQ_HZ = 100_000_000,
+
+    //-------------------------------------------------------------------------
+    // Timing Parameters (base values, modified by tempo select)
+    //-------------------------------------------------------------------------
+    // Base clocks per 16th note at 120 BPM
+    // Formula: CLOCKS_PER_16TH_BASE = clk_freq / (120 / 60 * 4) = clk_freq / 8
+    parameter CLOCKS_PER_16TH_BASE = CLK_FREQ_HZ / 8,
 
     //-------------------------------------------------------------------------
     // FM Modulation Parameters
     //-------------------------------------------------------------------------
-    // BASE_PHASE_INCREMENT: Phase increment for center (carrier) frequency
-    // Formula: (center_freq / clk_freq) * 2^32
-    //
-    // Example: For center_freq = clk_freq/4 (quarter of clock):
-    //   BASE_PHASE_INCREMENT = 0.25 * 2^32 = 0x40000000
-    //
     parameter [31:0] BASE_PHASE_INCREMENT = 32'h40000000,
-
-    // DEVIATION_PER_SEMITONE: Frequency shift per semitone
-    // This determines how much the frequency changes for each musical note.
-    // Higher values = wider FM deviation = easier to hear notes
-    //
-    // For typical FM radio (75 kHz deviation), with 12 semitones per octave:
-    //   deviation = 75000 / 12 ≈ 6250 Hz per semitone
-    //
-    // Phase increment per semitone = (6250 / clk_freq) * 2^32
-    // For 100 MHz clock: (6250 / 100M) * 2^32 ≈ 268,435
-    //
-    // For larger deviations (easier to distinguish notes):
-    //   100 kHz per semitone with 100 MHz clock:
-    //   (100000 / 100M) * 2^32 = 4,294,967 ≈ 0x00418937
-    //
     parameter [31:0] DEVIATION_PER_SEMITONE = 32'h00418937,
 
     //-------------------------------------------------------------------------
     // Melody Parameters
     //-------------------------------------------------------------------------
-    parameter MELODY_LENGTH = 82,    // Number of notes in Für Elise excerpt
-    parameter ADDR_WIDTH    = 7      // log2(MELODY_LENGTH), rounded up
+    parameter MELODY_LENGTH = 82,
+    parameter ADDR_WIDTH    = 7
 )(
     //-------------------------------------------------------------------------
     // Clock and Reset
@@ -108,15 +102,24 @@ module fur_elise_fm_top #(
     input  wire         rst_n,       // Active-low asynchronous reset
 
     //-------------------------------------------------------------------------
-    // Control Inputs
+    // Configuration Pins (directly from jumpers/DIP switch)
     //-------------------------------------------------------------------------
-    input  wire         enable,      // Enable melody playback
-    input  wire         loop,        // Loop melody continuously
+    input  wire [4:0]   cfg,         // Configuration jumpers
+                                     // [0]   = Loop enable
+                                     // [2:1] = Tempo select (00=60, 01=120, 10=180, 11=240 BPM)
+                                     // [3]   = Audio output enable
+                                     // [4]   = FM output enable
 
     //-------------------------------------------------------------------------
-    // FM Output
+    // Control Input
     //-------------------------------------------------------------------------
-    output wire         fm_out,      // FM modulated output (connect to GPIO)
+    input  wire         enable,      // Enable/start melody playback
+
+    //-------------------------------------------------------------------------
+    // Outputs
+    //-------------------------------------------------------------------------
+    output wire         fm_out,      // FM modulated RF output (GPIO)
+    output wire         audio_out,   // Audio frequency output (GPIO to speaker)
 
     //-------------------------------------------------------------------------
     // Status Outputs
@@ -127,6 +130,39 @@ module fur_elise_fm_top #(
 );
 
     //=========================================================================
+    // Configuration Decoding
+    //=========================================================================
+
+    // Extract configuration bits
+    wire cfg_loop_enable  = cfg[0];
+    wire [1:0] cfg_tempo  = cfg[2:1];
+    wire cfg_audio_enable = cfg[3];
+    wire cfg_fm_enable    = cfg[4];
+
+    //-------------------------------------------------------------------------
+    // Tempo Selection
+    //-------------------------------------------------------------------------
+    // Decode tempo configuration to clocks per 16th note
+    //
+    // Tempo | BPM | Multiplier | Clocks per 16th (100MHz) |
+    // ------|-----|------------|---------------------------|
+    // 00    | 60  | 2.0x       | 25,000,000               |
+    // 01    | 120 | 1.0x       | 12,500,000               |
+    // 10    | 180 | 0.667x     | 8,333,333                |
+    // 11    | 240 | 0.5x       | 6,250,000                |
+
+    reg [31:0] clocks_per_16th;
+
+    always @(*) begin
+        case (cfg_tempo)
+            2'b00: clocks_per_16th = CLOCKS_PER_16TH_BASE * 2;       // 60 BPM (slow)
+            2'b01: clocks_per_16th = CLOCKS_PER_16TH_BASE;           // 120 BPM (normal)
+            2'b10: clocks_per_16th = (CLOCKS_PER_16TH_BASE * 2) / 3; // 180 BPM (fast)
+            2'b11: clocks_per_16th = CLOCKS_PER_16TH_BASE / 2;       // 240 BPM (allegro)
+        endcase
+    end
+
+    //=========================================================================
     // Internal Signals
     //=========================================================================
 
@@ -134,16 +170,20 @@ module fur_elise_fm_top #(
     wire [ADDR_WIDTH-1:0] rom_addr;
     wire [15:0]           rom_data;
 
-    // Sequencer to note converter
+    // Sequencer outputs
     wire signed [7:0]     current_pitch;
     wire                  pitch_valid;
+    wire                  sequencer_playing;
+    wire                  sequencer_melody_end;
 
-    // Note converter to modulator
+    // FM modulator signals
     wire [31:0]           phase_increment;
     wire                  is_rest;
-
-    // FM modulator internal
     wire [31:0]           phase_accumulator;
+    wire                  fm_raw_out;
+
+    // Audio generator signals
+    wire                  audio_raw_out;
 
     //=========================================================================
     // Module Instances
@@ -151,7 +191,6 @@ module fur_elise_fm_top #(
 
     //-------------------------------------------------------------------------
     // Melody ROM
-    // Stores the Für Elise note sequence
     //-------------------------------------------------------------------------
     melody_rom #(
         .MELODY_LENGTH(MELODY_LENGTH),
@@ -163,29 +202,28 @@ module fur_elise_fm_top #(
     );
 
     //-------------------------------------------------------------------------
-    // Melody Sequencer
-    // Controls timing and steps through the melody
+    // Melody Sequencer (with runtime-configurable tempo)
     //-------------------------------------------------------------------------
     melody_sequencer #(
-        .CLOCKS_PER_16TH(CLOCKS_PER_16TH),
+        .CLOCKS_PER_16TH(CLOCKS_PER_16TH_BASE),  // Default fallback
         .MELODY_LENGTH(MELODY_LENGTH),
         .ADDR_WIDTH(ADDR_WIDTH)
     ) u_sequencer (
-        .clk        (clk),
-        .rst_n      (rst_n),
-        .enable     (enable),
-        .loop       (loop),
-        .note_data  (rom_data),
-        .note_addr  (rom_addr),
-        .note_pitch (current_pitch),
-        .note_valid (pitch_valid),
-        .playing    (playing),
-        .melody_end (melody_end)
+        .clk         (clk),
+        .rst_n       (rst_n),
+        .enable      (enable),
+        .loop        (cfg_loop_enable),
+        .tempo_clocks(clocks_per_16th),  // Runtime tempo from config pins
+        .note_data   (rom_data),
+        .note_addr   (rom_addr),
+        .note_pitch  (current_pitch),
+        .note_valid  (pitch_valid),
+        .playing     (sequencer_playing),
+        .melody_end  (sequencer_melody_end)
     );
 
     //-------------------------------------------------------------------------
-    // Note to Phase Increment Converter
-    // Converts musical pitch to DDS phase increment
+    // Note to Phase Increment Converter (for FM)
     //-------------------------------------------------------------------------
     note_to_phase_increment #(
         .ACCUMULATOR_WIDTH(32)
@@ -200,63 +238,117 @@ module fur_elise_fm_top #(
     );
 
     //-------------------------------------------------------------------------
-    // FM Modulator
-    // DDS-based frequency synthesizer
+    // FM Modulator (RF output)
     //-------------------------------------------------------------------------
     fm_modulator #(
         .ACCUMULATOR_WIDTH(32)
     ) u_fm_mod (
         .clk             (clk),
         .rst_n           (rst_n),
-        .enable          (enable & pitch_valid),
+        .enable          (enable & pitch_valid & cfg_fm_enable),
         .phase_increment (phase_increment),
-        .fm_out          (fm_out),
+        .fm_out          (fm_raw_out),
         .phase_out       (phase_accumulator)
     );
 
+    //-------------------------------------------------------------------------
+    // Audio Tone Generator (speaker output)
+    //-------------------------------------------------------------------------
+    audio_tone_generator #(
+        .CLK_FREQ_HZ(CLK_FREQ_HZ),
+        .ACCUMULATOR_WIDTH(32)
+    ) u_audio_gen (
+        .clk        (clk),
+        .rst_n      (rst_n),
+        .enable     (enable & cfg_audio_enable),
+        .note_pitch (current_pitch),
+        .note_valid (pitch_valid),
+        .audio_out  (audio_raw_out),
+        .audio_pwm  ()  // Not used in this version
+    );
+
     //=========================================================================
-    // Debug Outputs
+    // Output Gating
     //=========================================================================
+
+    // FM output: gated by configuration
+    assign fm_out = cfg_fm_enable ? fm_raw_out : 1'b0;
+
+    // Audio output: gated by configuration
+    assign audio_out = cfg_audio_enable ? audio_raw_out : 1'b0;
+
+    //=========================================================================
+    // Status Outputs
+    //=========================================================================
+    assign playing    = sequencer_playing;
+    assign melody_end = sequencer_melody_end;
     assign note_index = rom_addr;
 
 endmodule
 
 
-//-----------------------------------------------------------------------------
-// Helper Module: fur_elise_fm_params
-//
-// Description:
-//   Convenience module with pre-calculated parameters for common clock
-//   frequencies. Not synthesized - just for documentation/reference.
-//-----------------------------------------------------------------------------
-
+//=============================================================================
+// Configuration Reference (for documentation)
+//=============================================================================
 /*
-// Parameter lookup table for common configurations:
-//
-// +--------+-----------------+-------------------+---------------------+
-// | Clock  | CLOCKS_PER_16TH | BASE_PHASE_INC    | DEVIATION_PER_SEMI  |
-// | (MHz)  | (120 BPM)       | (clk/4 center)    | (~100kHz/semitone)  |
-// +--------+-----------------+-------------------+---------------------+
-// | 10     | 1,250,000       | 0x40000000        | 0x028F5C29          |
-// | 20     | 2,500,000       | 0x40000000        | 0x0147AE14          |
-// | 50     | 6,250,000       | 0x40000000        | 0x00831461          |
-// | 100    | 12,500,000      | 0x40000000        | 0x00418937          |
-// | 200    | 25,000,000      | 0x40000000        | 0x0020C49C          |
-// +--------+-----------------+-------------------+---------------------+
-//
-// For different tempos, scale CLOCKS_PER_16TH:
-//   60 BPM:  multiply by 2
-//   90 BPM:  multiply by 4/3
-//   120 BPM: use table value
-//   180 BPM: multiply by 2/3
-//   240 BPM: divide by 2
-//
-// For different center frequencies, adjust BASE_PHASE_INCREMENT:
-//   center_freq = clk/2:  BASE_PHASE_INC = 0x80000000
-//   center_freq = clk/4:  BASE_PHASE_INC = 0x40000000
-//   center_freq = clk/8:  BASE_PHASE_INC = 0x20000000
-//   center_freq = clk/16: BASE_PHASE_INC = 0x10000000
-//
-// Formula for any frequency:
-//   BASE_PHASE_INCREMENT = (center_freq_hz / clk_freq_hz) * 0x100000000
+ JUMPER CONFIGURATION QUICK REFERENCE
+ =====================================
+
+ cfg[4:0] | Loop | Tempo      | Audio | FM  | Use Case
+ ---------|------|------------|-------|-----|----------------------------------
+ 5'b00000 | No   | 60 BPM     | Off   | Off | Default (outputs disabled)
+ 5'b00001 | Yes  | 60 BPM     | Off   | Off | Loop mode test (no output)
+ 5'b00010 | No   | 120 BPM    | Off   | Off | Normal tempo test
+ 5'b01000 | No   | 60 BPM     | On    | Off | Audio only, slow
+ 5'b01001 | Yes  | 60 BPM     | On    | Off | Audio only, slow, looping
+ 5'b01010 | No   | 120 BPM    | On    | Off | Audio only, normal tempo
+ 5'b01011 | Yes  | 120 BPM    | On    | Off | *** RECOMMENDED: Audio test ***
+ 5'b10000 | No   | 60 BPM     | Off   | On  | FM only, slow
+ 5'b10011 | Yes  | 120 BPM    | Off   | On  | *** RECOMMENDED: FM test ***
+ 5'b11010 | No   | 120 BPM    | On    | On  | Both outputs, normal tempo
+ 5'b11011 | Yes  | 120 BPM    | On    | On  | *** RECOMMENDED: Full demo ***
+ 5'b11111 | Yes  | 240 BPM    | On    | On  | Both outputs, fast (allegro)
+
+ PHYSICAL JUMPER LAYOUT (suggested):
+ ===================================
+
+     J1    J2    J3    J4    J5
+    +---+ +---+ +---+ +---+ +---+
+    |   | |   | |   | |   | |   |
+    | L | | T | | T | | A | | F |
+    | O | | E | | E | | U | | M |
+    | O | | M | | M | | D | |   |
+    | P | | P | | P | | I | | E |
+    |   | | O | | O | | O | | N |
+    |   | | 0 | | 1 | |   | |   |
+    +---+ +---+ +---+ +---+ +---+
+    cfg[0] cfg[1] cfg[2] cfg[3] cfg[4]
+
+ Jumper installed = Logic 1 (high)
+ Jumper removed   = Logic 0 (low, via pull-down resistor)
+
+ TEMPO TABLE:
+ ============
+ cfg[2:1] | BPM | Quarter Note | Full Melody Duration
+ ---------|-----|--------------|----------------------
+    00    | 60  | 1.0 sec      | ~40 seconds
+    01    | 120 | 0.5 sec      | ~20 seconds
+    10    | 180 | 0.33 sec     | ~13 seconds
+    11    | 240 | 0.25 sec     | ~10 seconds
+
+ ASIC PIN ASSIGNMENT SUGGESTION:
+ ===============================
+ Pin 1:  clk         - Clock input
+ Pin 2:  rst_n       - Reset (active low)
+ Pin 3:  enable      - Start playback
+ Pin 4:  cfg[0]      - Loop enable jumper
+ Pin 5:  cfg[1]      - Tempo bit 0
+ Pin 6:  cfg[2]      - Tempo bit 1
+ Pin 7:  cfg[3]      - Audio enable jumper
+ Pin 8:  cfg[4]      - FM enable jumper
+ Pin 9:  fm_out      - FM RF output
+ Pin 10: audio_out   - Audio output (to speaker)
+ Pin 11: playing     - Status LED
+ Pin 12: melody_end  - End pulse output
+
 */
