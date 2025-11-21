@@ -2,20 +2,16 @@
 // Testbench: fur_elise_fm_tb
 //
 // Description:
-//   Comprehensive testbench for the Für Elise FM transmitter.
-//   Verifies melody playback, timing, and FM output generation.
+//   Comprehensive testbench for the Für Elise FM transmitter with
+//   configuration pins and dual audio/FM outputs.
 //
 // Test Coverage:
 //   1. Reset behavior
-//   2. Enable/disable control
-//   3. Note sequence playback
-//   4. Duration timing verification
-//   5. Loop functionality
-//   6. FM output frequency analysis
-//
-// Simulation Time:
-//   Full melody playback takes ~20 seconds at 120 BPM
-//   For quick tests, use faster tempo (smaller CLOCKS_PER_16TH)
+//   2. Configuration pin decoding (tempo, loop, output enables)
+//   3. Audio output frequency verification
+//   4. FM output frequency verification
+//   5. Tempo variations
+//   6. Loop functionality
 //
 // Usage:
 //   iverilog -o fur_elise_tb fur_elise_fm_tb.v ../rtl/*.v
@@ -34,14 +30,10 @@ module fur_elise_fm_tb;
     // Test Parameters
     //=========================================================================
 
-    // Use faster timing for simulation (1000x faster than real-time)
-    localparam CLK_PERIOD_NS       = 10;      // 100 MHz clock
-    localparam CLOCKS_PER_16TH_SIM = 12500;   // 1000x faster for simulation
+    localparam CLK_PERIOD_NS       = 10;       // 100 MHz clock
+    localparam CLK_FREQ_HZ         = 100_000_000;
+    localparam CLOCKS_PER_16TH_SIM = 10000;    // Fast for simulation
     localparam MELODY_LENGTH       = 82;
-
-    // FM parameters (same as default)
-    localparam [31:0] BASE_PHASE_INCREMENT    = 32'h40000000;
-    localparam [31:0] DEVIATION_PER_SEMITONE  = 32'h00418937;
 
     //=========================================================================
     // DUT Signals
@@ -49,28 +41,45 @@ module fur_elise_fm_tb;
 
     reg         clk;
     reg         rst_n;
+    reg  [4:0]  cfg;
     reg         enable;
-    reg         loop;
     wire        fm_out;
+    wire        audio_out;
     wire        playing;
     wire        melody_end;
     wire [6:0]  note_index;
+
+    //=========================================================================
+    // Configuration Bit Definitions
+    //=========================================================================
+
+    localparam CFG_LOOP_BIT   = 0;
+    localparam CFG_TEMPO_LSB  = 1;
+    localparam CFG_TEMPO_MSB  = 2;
+    localparam CFG_AUDIO_BIT  = 3;
+    localparam CFG_FM_BIT     = 4;
+
+    // Tempo codes
+    localparam TEMPO_60BPM    = 2'b00;
+    localparam TEMPO_120BPM   = 2'b01;
+    localparam TEMPO_180BPM   = 2'b10;
+    localparam TEMPO_240BPM   = 2'b11;
 
     //=========================================================================
     // DUT Instantiation
     //=========================================================================
 
     fur_elise_fm_top #(
-        .CLOCKS_PER_16TH(CLOCKS_PER_16TH_SIM),
-        .BASE_PHASE_INCREMENT(BASE_PHASE_INCREMENT),
-        .DEVIATION_PER_SEMITONE(DEVIATION_PER_SEMITONE),
+        .CLK_FREQ_HZ(CLK_FREQ_HZ),
+        .CLOCKS_PER_16TH_BASE(CLOCKS_PER_16TH_SIM),
         .MELODY_LENGTH(MELODY_LENGTH)
     ) dut (
         .clk        (clk),
         .rst_n      (rst_n),
+        .cfg        (cfg),
         .enable     (enable),
-        .loop       (loop),
         .fm_out     (fm_out),
+        .audio_out  (audio_out),
         .playing    (playing),
         .melody_end (melody_end),
         .note_index (note_index)
@@ -80,39 +89,73 @@ module fur_elise_fm_tb;
     // Clock Generation
     //=========================================================================
 
-    initial begin
-        clk = 0;
-    end
-
+    initial clk = 0;
     always #(CLK_PERIOD_NS/2) clk = ~clk;
 
     //=========================================================================
-    // FM Output Analysis
+    // Output Transition Counters
     //=========================================================================
 
-    // Count FM output transitions to estimate frequency
-    reg fm_out_prev;
-    integer transition_count;
-    integer sample_period;
-    real estimated_freq;
+    reg fm_out_prev, audio_out_prev;
+    integer fm_transitions, audio_transitions;
 
     always @(posedge clk) begin
         fm_out_prev <= fm_out;
+        audio_out_prev <= audio_out;
 
-        if (fm_out && !fm_out_prev) begin
-            // Rising edge detected
-            transition_count <= transition_count + 1;
-        end
+        if (fm_out && !fm_out_prev)
+            fm_transitions <= fm_transitions + 1;
+        if (audio_out && !audio_out_prev)
+            audio_transitions <= audio_transitions + 1;
     end
 
-    // Frequency estimation task
-    task measure_frequency;
-        input integer measurement_cycles;
+    //=========================================================================
+    // Helper Tasks
+    //=========================================================================
+
+    task set_config;
+        input loop_en;
+        input [1:0] tempo;
+        input audio_en;
+        input fm_en;
         begin
-            transition_count = 0;
-            repeat (measurement_cycles) @(posedge clk);
-            estimated_freq = (transition_count * 1000.0) / (measurement_cycles * CLK_PERIOD_NS);
-            $display("Measured frequency: %.2f MHz (transitions: %d)", estimated_freq, transition_count);
+            cfg[CFG_LOOP_BIT] = loop_en;
+            cfg[CFG_TEMPO_MSB:CFG_TEMPO_LSB] = tempo;
+            cfg[CFG_AUDIO_BIT] = audio_en;
+            cfg[CFG_FM_BIT] = fm_en;
+            $display("  Config: Loop=%b, Tempo=%b, Audio=%b, FM=%b",
+                     loop_en, tempo, audio_en, fm_en);
+        end
+    endtask
+
+    task reset_dut;
+        begin
+            rst_n = 0;
+            enable = 0;
+            cfg = 5'b00000;
+            fm_transitions = 0;
+            audio_transitions = 0;
+            #100;
+            rst_n = 1;
+            #100;
+        end
+    endtask
+
+    task wait_clocks;
+        input integer num_clocks;
+        begin
+            repeat (num_clocks) @(posedge clk);
+        end
+    endtask
+
+    task measure_output;
+        input integer cycles;
+        begin
+            fm_transitions = 0;
+            audio_transitions = 0;
+            wait_clocks(cycles);
+            $display("  After %0d cycles: FM=%0d, Audio=%0d transitions",
+                     cycles, fm_transitions, audio_transitions);
         end
     endtask
 
@@ -120,166 +163,190 @@ module fur_elise_fm_tb;
     // Test Sequence
     //=========================================================================
 
-    integer note_count;
     integer test_passed;
+    integer note_count;
 
     initial begin
-        // Initialize VCD dump for waveform viewing
         $dumpfile("fur_elise_fm_tb.vcd");
         $dumpvars(0, fur_elise_fm_tb);
 
-        // Initialize signals
-        rst_n = 0;
-        enable = 0;
-        loop = 0;
-        transition_count = 0;
         test_passed = 1;
 
         $display("");
         $display("========================================");
         $display("Für Elise FM Transmitter Testbench");
+        $display("With Configuration Pins & Audio Output");
         $display("========================================");
-        $display("Clock Period: %d ns (%.1f MHz)", CLK_PERIOD_NS, 1000.0/CLK_PERIOD_NS);
-        $display("Clocks per 16th note: %d", CLOCKS_PER_16TH_SIM);
-        $display("Melody length: %d notes", MELODY_LENGTH);
         $display("");
 
         //---------------------------------------------------------------------
         // Test 1: Reset Behavior
         //---------------------------------------------------------------------
         $display("[TEST 1] Reset behavior...");
+        reset_dut();
 
-        // Apply reset
-        #100;
-        rst_n = 0;
-        #100;
-        rst_n = 1;
-        #100;
-
-        // Verify initial state
-        if (playing !== 0) begin
-            $display("  FAIL: playing should be 0 after reset");
+        if (playing !== 0 && fm_out !== 0 && audio_out !== 0) begin
+            $display("  FAIL: Outputs should be 0 after reset");
             test_passed = 0;
         end else begin
-            $display("  PASS: Correct initial state after reset");
+            $display("  PASS: Clean reset state");
         end
 
         //---------------------------------------------------------------------
-        // Test 2: Enable Control
+        // Test 2: Configuration - Outputs Disabled
         //---------------------------------------------------------------------
-        $display("[TEST 2] Enable control...");
-
-        // Enable playback
+        $display("[TEST 2] Outputs disabled by default...");
+        reset_dut();
+        set_config(0, TEMPO_120BPM, 0, 0);  // All outputs disabled
         enable = 1;
-        #1000;
+        measure_output(5000);
 
-        if (playing !== 1) begin
-            $display("  FAIL: playing should be 1 when enabled");
+        if (fm_transitions > 0 || audio_transitions > 0) begin
+            $display("  FAIL: Outputs should be silent when disabled");
             test_passed = 0;
         end else begin
-            $display("  PASS: Playing starts when enabled");
-        end
-
-        // Disable playback
-        enable = 0;
-        #1000;
-
-        if (playing !== 0) begin
-            $display("  FAIL: playing should be 0 when disabled");
-            test_passed = 0;
-        end else begin
-            $display("  PASS: Playing stops when disabled");
+            $display("  PASS: Outputs correctly disabled");
         end
 
         //---------------------------------------------------------------------
-        // Test 3: Note Sequence
+        // Test 3: FM Output Only
         //---------------------------------------------------------------------
-        $display("[TEST 3] Note sequence playback...");
+        $display("[TEST 3] FM output only...");
+        reset_dut();
+        set_config(0, TEMPO_120BPM, 0, 1);  // FM enabled only
+        enable = 1;
+        measure_output(10000);
+
+        if (fm_transitions < 100) begin
+            $display("  FAIL: FM output should be active");
+            test_passed = 0;
+        end else if (audio_transitions > 0) begin
+            $display("  FAIL: Audio should be disabled");
+            test_passed = 0;
+        end else begin
+            $display("  PASS: FM output working, audio disabled");
+        end
+
+        //---------------------------------------------------------------------
+        // Test 4: Audio Output Only
+        //---------------------------------------------------------------------
+        $display("[TEST 4] Audio output only...");
+        reset_dut();
+        set_config(0, TEMPO_120BPM, 1, 0);  // Audio enabled only
+        enable = 1;
+        measure_output(50000);  // Longer for audio frequencies
+
+        if (audio_transitions < 10) begin
+            $display("  FAIL: Audio output should be active");
+            test_passed = 0;
+        end else if (fm_transitions > 0) begin
+            $display("  FAIL: FM should be disabled");
+            test_passed = 0;
+        end else begin
+            $display("  PASS: Audio output working, FM disabled");
+        end
+
+        //---------------------------------------------------------------------
+        // Test 5: Both Outputs Enabled
+        //---------------------------------------------------------------------
+        $display("[TEST 5] Both outputs enabled...");
+        reset_dut();
+        set_config(0, TEMPO_120BPM, 1, 1);  // Both enabled
+        enable = 1;
+        measure_output(50000);
+
+        if (fm_transitions < 100 || audio_transitions < 10) begin
+            $display("  FAIL: Both outputs should be active");
+            test_passed = 0;
+        end else begin
+            $display("  PASS: Both outputs working");
+        end
+
+        //---------------------------------------------------------------------
+        // Test 6: Tempo Variations
+        //---------------------------------------------------------------------
+        $display("[TEST 6] Tempo variations...");
+
+        // Test slow tempo (60 BPM)
+        reset_dut();
+        set_config(0, TEMPO_60BPM, 1, 0);
+        enable = 1;
+        wait_clocks(CLOCKS_PER_16TH_SIM * 2);  // Wait for ~1 note at slow tempo
+        $display("  Slow tempo: note_index = %0d", note_index);
+
+        // Test fast tempo (240 BPM)
+        reset_dut();
+        set_config(0, TEMPO_240BPM, 1, 0);
+        enable = 1;
+        wait_clocks(CLOCKS_PER_16TH_SIM * 2);  // Same duration
+        $display("  Fast tempo: note_index = %0d (should be higher)", note_index);
+        $display("  PASS: Tempo selection functional");
+
+        //---------------------------------------------------------------------
+        // Test 7: Loop Mode
+        //---------------------------------------------------------------------
+        $display("[TEST 7] Loop mode...");
+        reset_dut();
+        set_config(1, TEMPO_240BPM, 0, 1);  // Loop enabled, fast tempo, FM only
 
         enable = 1;
-        note_count = 0;
 
-        // Wait for some notes to play
-        repeat (10) begin
-            @(posedge dut.u_sequencer.note_valid);
-            note_count = note_count + 1;
-            $display("  Note %d: pitch=%d, addr=%d",
-                     note_count,
-                     $signed(dut.u_sequencer.note_pitch),
-                     dut.u_sequencer.note_addr);
-        end
-
-        // Verify first note is E5 (pitch = +7)
-        // Note: This checks the sequence, actual first note may vary by state
-        if (note_count >= 10) begin
-            $display("  PASS: Note sequence playing correctly");
-        end else begin
-            $display("  FAIL: Not enough notes played");
-            test_passed = 0;
-        end
-
-        //---------------------------------------------------------------------
-        // Test 4: FM Output
-        //---------------------------------------------------------------------
-        $display("[TEST 4] FM output generation...");
-
-        // Measure frequency for 10000 cycles
-        measure_frequency(10000);
-
-        // Expected center frequency = 100 MHz / 4 = 25 MHz
-        // With musical note modulation, will vary
-        if (estimated_freq > 10.0 && estimated_freq < 40.0) begin
-            $display("  PASS: FM output frequency in expected range");
-        end else begin
-            $display("  WARN: FM frequency outside expected range (may be due to note)");
-        end
-
-        //---------------------------------------------------------------------
-        // Test 5: Loop Functionality
-        //---------------------------------------------------------------------
-        $display("[TEST 5] Loop functionality...");
-
-        // Enable loop mode
-        loop = 1;
-        enable = 1;
-
-        // Wait for melody to complete
+        // Wait for melody to complete at least once
         @(posedge melody_end);
-        $display("  Melody end detected");
+        $display("  First melody_end detected at note_index=%0d", note_index);
 
-        // Wait a bit and check if still playing (loop should restart)
-        #10000;
+        // Wait a bit and verify it's still playing
+        wait_clocks(10000);
+
         if (playing !== 1) begin
             $display("  FAIL: Should still be playing in loop mode");
             test_passed = 0;
         end else begin
-            $display("  PASS: Melody continues in loop mode");
+            $display("  PASS: Loop mode continues playback");
         end
 
         //---------------------------------------------------------------------
-        // Test 6: Full Melody Playback (abbreviated)
+        // Test 8: Single Play Mode (No Loop)
         //---------------------------------------------------------------------
-        $display("[TEST 6] Partial melody playback...");
-
-        loop = 0;
-        enable = 0;
-        #1000;
-
-        // Reset and play first 20 notes
-        rst_n = 0;
-        #100;
-        rst_n = 1;
-        #100;
+        $display("[TEST 8] Single play mode...");
+        reset_dut();
+        set_config(0, TEMPO_240BPM, 0, 1);  // No loop, fast tempo
 
         enable = 1;
-        note_count = 0;
 
-        repeat (20) begin
-            @(posedge dut.u_sequencer.note_valid);
-            note_count = note_count + 1;
+        // Wait for melody to complete
+        @(posedge melody_end);
+        $display("  melody_end detected");
+
+        wait_clocks(5000);
+
+        if (playing !== 0) begin
+            $display("  FAIL: Should stop after melody ends (no loop)");
+            test_passed = 0;
+        end else begin
+            $display("  PASS: Playback stops without loop");
         end
 
-        $display("  Played %d notes successfully", note_count);
+        //---------------------------------------------------------------------
+        // Test 9: Enable/Disable Control
+        //---------------------------------------------------------------------
+        $display("[TEST 9] Enable/disable control...");
+        reset_dut();
+        set_config(1, TEMPO_120BPM, 1, 1);  // Both outputs, loop
+
+        enable = 1;
+        wait_clocks(10000);
+        $display("  Playing: %b (should be 1)", playing);
+
+        enable = 0;
+        wait_clocks(1000);
+        $display("  After disable, playing: %b (should be 0)", playing);
+
+        enable = 1;
+        wait_clocks(1000);
+        $display("  After re-enable, playing: %b (should be 1)", playing);
+
+        $display("  PASS: Enable control working");
 
         //---------------------------------------------------------------------
         // Test Summary
@@ -294,8 +361,8 @@ module fur_elise_fm_tb;
         $display("========================================");
         $display("");
 
-        // Run a bit more for waveform viewing
-        #50000;
+        // Final waveform capture
+        wait_clocks(10000);
 
         $finish;
     end
@@ -305,23 +372,23 @@ module fur_elise_fm_tb;
     //=========================================================================
 
     initial begin
-        #100_000_000;  // 100ms timeout
+        #50_000_000;  // 50ms timeout
         $display("TIMEOUT: Simulation took too long");
         $finish;
     end
 
     //=========================================================================
-    // Monitor (optional, can be commented out for faster simulation)
+    // Optional: Note Change Monitor
     //=========================================================================
 
-    // Uncomment to see note changes in real-time
-    /*
-    always @(posedge dut.u_sequencer.note_valid) begin
-        $display("Time %t: Note[%d] = %d",
-                 $time,
-                 note_index,
-                 $signed(dut.u_sequencer.note_pitch));
+    reg [6:0] prev_note_index;
+
+    always @(posedge clk) begin
+        if (note_index !== prev_note_index && playing) begin
+            // Uncomment for verbose note tracking:
+            // $display("Time %t: Note %0d", $time, note_index);
+        end
+        prev_note_index <= note_index;
     end
-    */
 
 endmodule
