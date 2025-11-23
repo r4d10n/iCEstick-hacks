@@ -1,0 +1,144 @@
+# ECP5 Constraints for Fur Elise FM Transmitter
+# Target: ULX3S or similar ECP5-25F board
+# Adjust pin locations for your specific board
+
+#=============================================================================
+# Clock and Reset
+#=============================================================================
+LOCATE COMP "clk" SITE "G2";       # 25 MHz clock input (ULX3S)
+IOBUF PORT "clk" IO_TYPE=LVCMOS33;
+FREQUENCY PORT "clk" 25 MHZ;
+
+LOCATE COMP "rst_n" SITE "D6";     # Reset button (active low)
+IOBUF PORT "rst_n" IO_TYPE=LVCMOS33 PULLMODE=UP;
+
+#=============================================================================
+# Enable Signal
+#=============================================================================
+LOCATE COMP "ena" SITE "R1";       # Enable (tied high or switch)
+IOBUF PORT "ena" IO_TYPE=LVCMOS33 PULLMODE=UP;
+
+#=============================================================================
+# Input Signals (ui_in[7:0])
+#=============================================================================
+# DIP switches or GPIO headers
+LOCATE COMP "ui_in[0]" SITE "F1";  # enable
+IOBUF PORT "ui_in[0]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+
+LOCATE COMP "ui_in[1]" SITE "F2";  # loop
+IOBUF PORT "ui_in[1]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+
+LOCATE COMP "ui_in[2]" SITE "E1";  # clk_2x_enable
+IOBUF PORT "ui_in[2]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+
+LOCATE COMP "ui_in[3]" SITE "E2";  # pwm_in
+IOBUF PORT "ui_in[3]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+
+LOCATE COMP "ui_in[4]" SITE "D1";  # reserved
+IOBUF PORT "ui_in[4]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+
+LOCATE COMP "ui_in[5]" SITE "D2";  # reserved
+IOBUF PORT "ui_in[5]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+
+LOCATE COMP "ui_in[6]" SITE "C1";  # reserved
+IOBUF PORT "ui_in[6]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+
+LOCATE COMP "ui_in[7]" SITE "C2";  # reserved
+IOBUF PORT "ui_in[7]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+
+#=============================================================================
+# Output Signals (uo_out[7:0])
+#=============================================================================
+# LEDs or GPIO headers
+LOCATE COMP "uo_out[0]" SITE "B2";  # fm_out (connect to antenna)
+IOBUF PORT "uo_out[0]" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "uo_out[1]" SITE "C3";  # audio_out (connect to speaker/amp)
+IOBUF PORT "uo_out[1]" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "uo_out[2]" SITE "B1";  # playing (LED indicator)
+IOBUF PORT "uo_out[2]" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "uo_out[3]" SITE "H3";  # melody_end (LED indicator)
+IOBUF PORT "uo_out[3]" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "uo_out[4]" SITE "H4";  # note_index[0] (debug LED)
+IOBUF PORT "uo_out[4]" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "uo_out[5]" SITE "J4";  # note_index[1] (debug LED)
+IOBUF PORT "uo_out[5]" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "uo_out[6]" SITE "G3";  # note_index[2] (debug LED)
+IOBUF PORT "uo_out[6]" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "uo_out[7]" SITE "G4";  # note_index[3] (debug LED)
+IOBUF PORT "uo_out[7]" IO_TYPE=LVCMOS33 DRIVE=4;
+
+#=============================================================================
+# Bidirectional Signals (uio_in/out/oe[7:0])
+#=============================================================================
+# GPIO headers for debug (phase increment output)
+LOCATE COMP "uio_in[0]" SITE "E3";
+LOCATE COMP "uio_out[0]" SITE "E3";
+LOCATE COMP "uio_oe[0]" SITE "E3";
+IOBUF PORT "uio_in[0]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_out[0]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_oe[0]" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "uio_in[1]" SITE "D3";
+LOCATE COMP "uio_out[1]" SITE "D3";
+LOCATE COMP "uio_oe[1]" SITE "D3";
+IOBUF PORT "uio_in[1]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_out[1]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_oe[1]" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "uio_in[2]" SITE "C4";
+LOCATE COMP "uio_out[2]" SITE "C4";
+LOCATE COMP "uio_oe[2]" SITE "C4";
+IOBUF PORT "uio_in[2]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_out[2]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_oe[2]" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "uio_in[3]" SITE "B4";
+LOCATE COMP "uio_out[3]" SITE "B4";
+LOCATE COMP "uio_oe[3]" SITE "B4";
+IOBUF PORT "uio_in[3]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_out[3]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_oe[3]" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "uio_in[4]" SITE "A2";
+LOCATE COMP "uio_out[4]" SITE "A2";
+LOCATE COMP "uio_oe[4]" SITE "A2";
+IOBUF PORT "uio_in[4]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_out[4]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_oe[4]" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "uio_in[5]" SITE "A3";
+LOCATE COMP "uio_out[5]" SITE "A3";
+LOCATE COMP "uio_oe[5]" SITE "A3";
+IOBUF PORT "uio_in[5]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_out[5]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_oe[5]" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "uio_in[6]" SITE "A4";
+LOCATE COMP "uio_out[6]" SITE "A4";
+LOCATE COMP "uio_oe[6]" SITE "A4";
+IOBUF PORT "uio_in[6]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_out[6]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_oe[6]" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "uio_in[7]" SITE "A5";
+LOCATE COMP "uio_out[7]" SITE "A5";
+LOCATE COMP "uio_oe[7]" SITE "A5";
+IOBUF PORT "uio_in[7]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_out[7]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_oe[7]" IO_TYPE=LVCMOS33;
+
+#=============================================================================
+# Notes:
+# - Pin locations are generic and should be adjusted for your specific board
+# - For ULX3S, refer to: https://github.com/emard/ulx3s/blob/master/doc/constraints/ulx3s_v20.lpf
+# - For OrangeCrab, refer to board-specific constraints
+# - fm_out should connect to appropriate RF output circuitry
+# - audio_out can connect directly to speaker with series resistor
+#=============================================================================
