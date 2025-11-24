@@ -6,7 +6,7 @@
 PROJECT = fur_elise_fm_ecp5
 TOP_MODULE = tt_um_fur_elise_fm
 DEVICE = 25k
-PACKAGE = CABGA381
+PACKAGE = caBGA256
 SPEED = 6
 
 # Source files
