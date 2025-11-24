@@ -1,0 +1,2092 @@
+From f5b5165ce15adc232cc3a31559899c681ea8ccba Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 24 Nov 2025 01:50:52 +0000
+Subject: [PATCH] Add FM transmitter with tone generation
+
+---
+ info.yaml                  |  63 ++++----
+ src/audio_tone_generator.v | 163 +++++++++++++++++++
+ src/clock_doubler.v        | 133 ++++++++++++++++
+ src/fm_modulator.v         | 178 +++++++++++++++++++++
+ src/fur_elise_fm_top.v     | 312 +++++++++++++++++++++++++++++++++++++
+ src/melody_rom.v           | 220 ++++++++++++++++++++++++++
+ src/melody_sequencer.v     | 255 ++++++++++++++++++++++++++++++
+ src/project.v              |  89 ++++++++++-
+ src/pwm_input_decoder.v    | 185 ++++++++++++++++++++++
+ test/Makefile              |  54 ++-----
+ test/tb.v                  | 292 ++++++++++++++++++++++++++++------
+ 11 files changed, 1827 insertions(+), 117 deletions(-)
+ create mode 100644 src/audio_tone_generator.v
+ create mode 100644 src/clock_doubler.v
+ create mode 100644 src/fm_modulator.v
+ create mode 100644 src/fur_elise_fm_top.v
+ create mode 100644 src/melody_rom.v
+ create mode 100644 src/melody_sequencer.v
+ create mode 100644 src/pwm_input_decoder.v
+
+diff --git a/info.yaml b/info.yaml
+index 3be29db..8082ef0 100644
+--- a/info.yaml
++++ b/info.yaml
+@@ -1,56 +1,63 @@
+ # Tiny Tapeout project information
+ project:
+-  title:        ""      # Project title
+-  author:       ""      # Your name
+-  discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
+-  description:  ""      # One line description of what your project does
+-  language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
+-  clock_hz:     0       # Clock frequency in Hz (or 0 if not applicable)
++  title:        "Audio Tone Generator & FM Transmitter"
++  author:       "r4d10n"
++  discord:      ""
++  description:  "FM transmitter with audio tone generation and melody playback via DDS"
++  language:     "Verilog"
++  clock_hz:     50000000  # 50 MHz
+ 
+   # How many tiles your design occupies? A single tile is about 340x160 uM.
+-  tiles: "1x1"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 3x4 or 4x4
++  tiles: "1x1"
+ 
+   # Your top module name must start with "tt_um_". Make it unique by including your github username:
+-  top_module:  "tt_um_example"
++  top_module:  "tt_um_tone_fm_tx"
+ 
+   # List your project's source files here.
+   # Source files must be in ./src and you must list each source file separately, one per line.
+   # Don't forget to also update `PROJECT_SOURCES` in test/Makefile.
+   source_files:
+     - "project.v"
++    - "fur_elise_fm_top.v"
++    - "melody_rom.v"
++    - "melody_sequencer.v"
++    - "fm_modulator.v"
++    - "audio_tone_generator.v"
++    - "clock_doubler.v"
++    - "pwm_input_decoder.v"
+ 
+ # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
+ # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
+ pinout:
+   # Inputs
+-  ui[0]: ""
+-  ui[1]: ""
+-  ui[2]: ""
+-  ui[3]: ""
++  ui[0]: "enable"
++  ui[1]: "loop"
++  ui[2]: "clk_2x_enable"
++  ui[3]: "pwm_in"
+   ui[4]: ""
+   ui[5]: ""
+   ui[6]: ""
+   ui[7]: ""
+ 
+   # Outputs
+-  uo[0]: ""
+-  uo[1]: ""
+-  uo[2]: ""
+-  uo[3]: ""
+-  uo[4]: ""
+-  uo[5]: ""
+-  uo[6]: ""
+-  uo[7]: ""
++  uo[0]: "fm_out"
++  uo[1]: "audio_out"
++  uo[2]: "playing"
++  uo[3]: "melody_end"
++  uo[4]: "note_index[0]"
++  uo[5]: "note_index[1]"
++  uo[6]: "note_index[2]"
++  uo[7]: "note_index[3]"
+ 
+   # Bidirectional pins
+-  uio[0]: ""
+-  uio[1]: ""
+-  uio[2]: ""
+-  uio[3]: ""
+-  uio[4]: ""
+-  uio[5]: ""
+-  uio[6]: ""
+-  uio[7]: ""
++  uio[0]: "phase_inc[24]"
++  uio[1]: "phase_inc[25]"
++  uio[2]: "phase_inc[26]"
++  uio[3]: "phase_inc[27]"
++  uio[4]: "phase_inc[28]"
++  uio[5]: "phase_inc[29]"
++  uio[6]: "phase_inc[30]"
++  uio[7]: "phase_inc[31]"
+ 
+ # Do not change!
+ yaml_version: 6
+diff --git a/src/audio_tone_generator.v b/src/audio_tone_generator.v
+new file mode 100644
+index 0000000..2b0d86a
+--- /dev/null
++++ b/src/audio_tone_generator.v
+@@ -0,0 +1,163 @@
++//-----------------------------------------------------------------------------
++// Module: audio_tone_generator
++//
++// Description:
++//   Generates audio-frequency square wave tones corresponding to musical notes.
++//   Unlike the FM modulator (which generates RF frequencies), this module
++//   outputs actual audio frequencies (20 Hz - 20 kHz range) suitable for:
++//   - Direct connection to a speaker/buzzer
++//   - Audio amplifier input
++//   - Debugging/verification of note sequence
++//
++// Theory of Operation:
++//   Uses a phase accumulator similar to FM modulator, but with phase increments
++//   calculated for audio frequencies (e.g., A4 = 440 Hz).
++//
++//   For a note with frequency f_note:
++//     phase_increment = (f_note / clk_freq) × 2^32
++//
++//   The MSB toggles at the note frequency, creating a square wave tone.
++//
++// Note Frequency Table (A4 = 440 Hz, Equal Temperament):
++//   Semitone offset from A4 → frequency:
++//     f = 440 × 2^(semitone/12)
++//
++//   | Semitone | Note | Frequency (Hz) | Phase Inc (100MHz) |
++//   |----------|------|----------------|---------------------|
++//   | -9       | C4   | 261.63         | 11,244              |
++//   | -5       | E4   | 329.63         | 14,168              |
++//   | -2       | G4   | 392.00         | 16,848              |
++//   | 0        | A4   | 440.00         | 18,912              |
++//   | +2       | B4   | 493.88         | 21,228              |
++//   | +3       | C5   | 523.25         | 22,490              |
++//   | +7       | E5   | 659.26         | 28,336              |
++//
++// Design Notes:
++//   - Architecture independent (pure behavioral Verilog)
++//   - Uses lookup table for note frequencies (12-TET)
++//   - REST produces silence (output held low)
++//   - Volume control via PWM duty cycle (optional)
++//
++// Author: Based on iCEstick-hacks FM transmitter project
++// Target: GF180MCU ASIC (architecture independent)
++// License: MIT
++//-----------------------------------------------------------------------------
++
++module audio_tone_generator #(
++    parameter CLK_FREQ_HZ = 100_000_000,  // Input clock frequency
++    parameter ACCUMULATOR_WIDTH = 32      // Phase accumulator width
++)(
++    input  wire                    clk,
++    input  wire                    rst_n,
++    input  wire                    enable,
++    input  wire signed [7:0]       note_pitch,    // Semitones from A4
++    input  wire                    note_valid,
++    output wire                    audio_out,     // Square wave audio output
++    output wire                    audio_pwm      // PWM audio (for filtering)
++);
++
++    //-------------------------------------------------------------------------
++    // Constants
++    //-------------------------------------------------------------------------
++    localparam signed [7:0] REST_VALUE = 8'h80;
++
++    // Base frequency for A4 (440 Hz)
++    // Phase increment = (440 / CLK_FREQ_HZ) * 2^32
++    // For 100 MHz: (440 / 100_000_000) * 4_294_967_296 = 18,897
++    localparam [31:0] A4_PHASE_INCREMENT = (440 * 64'd4_294_967_296) / CLK_FREQ_HZ;
++
++    //-------------------------------------------------------------------------
++    // Note Frequency Lookup Table
++    //-------------------------------------------------------------------------
++    // Pre-calculated multipliers for semitone offsets
++    // Multiplier = 2^(semitone/12) * 65536 (fixed-point 16.16)
++    //
++    // This avoids runtime exponential calculation
++
++    function [31:0] semitone_multiplier;
++        input signed [7:0] semitone;
++        begin
++            // Lookup table for semitone multipliers (×65536 fixed point)
++            // Only cover the range we need for Für Elise (-9 to +12)
++            case (semitone)
++                -8'd12: semitone_multiplier = 32768;   // 0.5×
++                -8'd11: semitone_multiplier = 34716;   // 2^(-11/12)
++                -8'd10: semitone_multiplier = 36781;   // 2^(-10/12)
++                -8'd9:  semitone_multiplier = 38968;   // C4: 2^(-9/12) = 0.5946
++                -8'd8:  semitone_multiplier = 41285;   // C#4
++                -8'd7:  semitone_multiplier = 43740;   // D4
++                -8'd6:  semitone_multiplier = 46341;   // D#4
++                -8'd5:  semitone_multiplier = 49097;   // E4
++                -8'd4:  semitone_multiplier = 52016;   // F4
++                -8'd3:  semitone_multiplier = 55109;   // F#4
++                -8'd2:  semitone_multiplier = 58386;   // G4
++                -8'd1:  semitone_multiplier = 61858;   // G#4
++                8'd0:   semitone_multiplier = 65536;   // A4: 1.0×
++                8'd1:   semitone_multiplier = 69433;   // A#4
++                8'd2:   semitone_multiplier = 73562;   // B4
++                8'd3:   semitone_multiplier = 77936;   // C5
++                8'd4:   semitone_multiplier = 82570;   // C#5
++                8'd5:   semitone_multiplier = 87480;   // D5
++                8'd6:   semitone_multiplier = 92682;   // D#5
++                8'd7:   semitone_multiplier = 98193;   // E5
++                8'd8:   semitone_multiplier = 104032;  // F5
++                8'd9:   semitone_multiplier = 110218;  // F#5
++                8'd10:  semitone_multiplier = 116772;  // G5
++                8'd11:  semitone_multiplier = 123715;  // G#5
++                8'd12:  semitone_multiplier = 131072;  // A5: 2.0×
++                default: semitone_multiplier = 65536;  // Default to A4
++            endcase
++        end
++    endfunction
++
++    //-------------------------------------------------------------------------
++    // Phase Increment Calculation
++    //-------------------------------------------------------------------------
++    wire is_rest = (note_pitch == REST_VALUE);
++
++    // Get multiplier for current note
++    wire [31:0] multiplier = semitone_multiplier(note_pitch);
++
++    // Calculate phase increment: A4_increment × multiplier / 65536
++    wire [63:0] phase_product = A4_PHASE_INCREMENT * multiplier;
++    wire [31:0] note_phase_increment = phase_product[47:16];  // Divide by 65536
++
++    //-------------------------------------------------------------------------
++    // Phase Accumulator
++    //-------------------------------------------------------------------------
++    reg [ACCUMULATOR_WIDTH-1:0] phase_accumulator;
++    reg [31:0] current_phase_increment;
++
++    always @(posedge clk or negedge rst_n) begin
++        if (!rst_n) begin
++            phase_accumulator <= {ACCUMULATOR_WIDTH{1'b0}};
++            current_phase_increment <= {32{1'b0}};
++        end else if (enable && note_valid) begin
++            // Update phase increment when note changes
++            if (!is_rest) begin
++                current_phase_increment <= note_phase_increment;
++            end else begin
++                current_phase_increment <= {32{1'b0}};
++            end
++
++            // Accumulate phase
++            phase_accumulator <= phase_accumulator + current_phase_increment;
++        end else if (!enable) begin
++            // Hold when disabled
++            phase_accumulator <= {ACCUMULATOR_WIDTH{1'b0}};
++        end
++    end
++
++    //-------------------------------------------------------------------------
++    // Output Generation
++    //-------------------------------------------------------------------------
++    // Square wave output (MSB of accumulator)
++    assign audio_out = enable && note_valid && !is_rest ? phase_accumulator[ACCUMULATOR_WIDTH-1] : 1'b0;
++
++    // PWM output (can be low-pass filtered for smoother audio)
++    // Uses upper 8 bits for 256-level PWM
++    // This creates a more sine-like waveform when filtered
++    assign audio_pwm = audio_out;  // For now, same as square wave
++                                   // Could implement true PWM here
++
++endmodule
+diff --git a/src/clock_doubler.v b/src/clock_doubler.v
+new file mode 100644
+index 0000000..ae4f475
+--- /dev/null
++++ b/src/clock_doubler.v
+@@ -0,0 +1,133 @@
++//-----------------------------------------------------------------------------
++// Module: clock_doubler
++//
++// Description:
++//   Generates a clock signal at approximately twice the input frequency using
++//   an XOR-based edge detection technique. This creates pulses on both rising
++//   and falling edges of the input clock.
++//
++// Theory of Operation:
++//   The clock doubler XORs the input clock with a delayed version of itself.
++//   When the clock transitions (either direction), there's a brief period where
++//   clk and clk_delayed differ, producing a pulse.
++//
++//   Timing diagram:
++//   clk:         ____/‾‾‾‾\____/‾‾‾‾\____
++//   clk_delayed: ______/‾‾‾‾\____/‾‾‾‾\__
++//   clk_2x:      ____/\__/\__/\__/\__/\__  (pulses at each edge)
++//
++// Implementation:
++//   Uses a chain of inverters (or buffers) to create the delay. The delay
++//   determines the pulse width of the doubled clock.
++//
++// Important Notes:
++//   - Output duty cycle is NOT 50% - it produces narrow pulses
++//   - Pulse width depends on inverter chain delay (technology dependent)
++//   - For ASIC: adjust DELAY_STAGES based on gate delays
++//   - Jitter will be present due to delay variation
++//   - Use for DDS phase accumulator clocking, not for synchronous logic
++//
++// Usage:
++//   - Enable via clk_2x_enable input
++//   - When disabled, clk_out = clk_in (bypass mode)
++//   - phase_increment_out allows monitoring the FM frequency
++//
++// Author: Based on iCEstick-hacks FM transmitter project
++// Target: GF180MCU ASIC (architecture independent)
++// License: MIT
++//-----------------------------------------------------------------------------
++
++module clock_doubler #(
++    parameter DELAY_STAGES = 8    // Number of inverter stages for delay
++                                  // Adjust based on technology
++                                  // More stages = wider pulse width
++)(
++    input  wire clk_in,           // Input clock (~100 MHz)
++    input  wire enable,           // Enable clock doubling
++    output wire clk_out           // Output clock (2x when enabled, 1x when disabled)
++);
++
++    //-------------------------------------------------------------------------
++    // Delay Chain
++    //-------------------------------------------------------------------------
++    // Create delayed version of clock using inverter chain
++    // Each inverter adds gate delay (technology dependent)
++    //
++    // For GF180MCU (180nm), typical inverter delay ~0.1-0.2ns
++    // 8 stages ≈ 0.8-1.6ns delay
++    // This creates ~1ns pulse width at each clock edge
++
++    (* keep = "true" *)  // Prevent optimization from removing delay chain
++    wire [DELAY_STAGES:0] delay_chain;
++
++    assign delay_chain[0] = clk_in;
++
++    // Generate delay chain using inverters
++    // Using NOT gates in pairs to maintain polarity
++    genvar i;
++    generate
++        for (i = 0; i < DELAY_STAGES; i = i + 1) begin : delay_stage
++            // Each stage is an inverter (adds delay)
++            // Using (* keep *) to prevent optimization
++            (* keep = "true" *)
++            wire delayed;
++            assign delayed = ~delay_chain[i];
++            assign delay_chain[i+1] = ~delayed;  // Double invert to maintain polarity
++        end
++    endgenerate
++
++    wire clk_delayed = delay_chain[DELAY_STAGES];
++
++    //-------------------------------------------------------------------------
++    // XOR-based Edge Detection
++    //-------------------------------------------------------------------------
++    // XOR produces a pulse whenever clk_in and clk_delayed differ
++    // This happens briefly after each clock edge
++
++    wire clk_doubled = clk_in ^ clk_delayed;
++
++    //-------------------------------------------------------------------------
++    // Output Multiplexer
++    //-------------------------------------------------------------------------
++    // Select between doubled clock and original clock
++
++    assign clk_out = enable ? clk_doubled : clk_in;
++
++endmodule
++
++
++//-----------------------------------------------------------------------------
++// Alternative: Latch-based Clock Doubler (more reliable duty cycle)
++//-----------------------------------------------------------------------------
++// This alternative uses latches to create a more stable doubled clock
++// with better duty cycle, but requires more careful timing analysis.
++//
++// Note: Uncomment and use if XOR method proves unstable
++//-----------------------------------------------------------------------------
++
++/*
++module clock_doubler_latch (
++    input  wire clk_in,
++    input  wire enable,
++    output wire clk_out
++);
++
++    // Generate inverted clock
++    wire clk_inv = ~clk_in;
++
++    // XOR rising edges of both clocks
++    // This effectively doubles the frequency with ~50% duty cycle
++    // But requires both clock edges to be used
++
++    reg toggle_a = 0;
++    reg toggle_b = 0;
++
++    always @(posedge clk_in) toggle_a <= ~toggle_a;
++    always @(posedge clk_inv) toggle_b <= ~toggle_b;
++
++    wire clk_doubled = toggle_a ^ toggle_b;
++
++    assign clk_out = enable ? clk_doubled : clk_in;
++
++endmodule
++*/
+diff --git a/src/fm_modulator.v b/src/fm_modulator.v
+new file mode 100644
+index 0000000..0e199f5
+--- /dev/null
++++ b/src/fm_modulator.v
+@@ -0,0 +1,178 @@
++//-----------------------------------------------------------------------------
++// Module: fm_modulator
++//
++// Description:
++//   Direct Digital Synthesis (DDS) based FM modulator. Uses a 32-bit phase
++//   accumulator to generate an output signal at a frequency determined by
++//   the phase increment input. The MSB of the accumulator provides a
++//   square wave output at the desired frequency.
++//
++// Theory of Operation:
++//   - Each clock cycle, phase_increment is added to a 32-bit accumulator
++//   - The accumulator wraps around (overflows) naturally
++//   - The MSB toggles at frequency = (phase_increment / 2^32) * clk_freq
++//   - Output jitter is approximately 1 clock cycle (1/clk_freq seconds)
++//
++// Frequency Formula:
++//   phase_increment = (desired_freq_hz / clock_freq_hz) * 2^32
++//
++// Example (100 MHz clock, 25 MHz output):
++//   phase_increment = (25,000,000 / 100,000,000) * 4,294,967,296
++//                   = 0.25 * 4,294,967,296
++//                   = 1,073,741,824 (0x40000000)
++//
++// Design Notes:
++//   - Architecture independent (pure behavioral Verilog)
++//   - No vendor-specific primitives
++//   - Single clock domain
++//   - Fully synchronous design
++//   - Suitable for ASIC synthesis (GF180MCU target)
++//
++// Author: Based on iCEstick-hacks FM transmitter project
++// Target: GF180MCU ASIC (architecture independent)
++// License: MIT
++//-----------------------------------------------------------------------------
++
++module fm_modulator #(
++    parameter ACCUMULATOR_WIDTH = 32    // Phase accumulator bit width
++)(
++    input  wire                           clk,
++    input  wire                           rst_n,
++    input  wire                           enable,
++    input  wire [ACCUMULATOR_WIDTH-1:0]   phase_increment,
++    output wire                           fm_out,
++    output wire [ACCUMULATOR_WIDTH-1:0]   phase_out    // Debug output
++);
++
++    //-------------------------------------------------------------------------
++    // Phase Accumulator Register
++    //-------------------------------------------------------------------------
++    // This is the heart of the DDS. Each clock cycle, we add the phase
++    // increment to the accumulator. When it overflows, the MSB toggles.
++
++    reg [ACCUMULATOR_WIDTH-1:0] phase_accumulator;
++
++    always @(posedge clk or negedge rst_n) begin
++        if (!rst_n) begin
++            phase_accumulator <= {ACCUMULATOR_WIDTH{1'b0}};
++        end else if (enable) begin
++            // Add phase increment (wraps naturally on overflow)
++            phase_accumulator <= phase_accumulator + phase_increment;
++        end
++        // When disabled, accumulator holds its value (carrier off)
++    end
++
++    //-------------------------------------------------------------------------
++    // Output Generation
++    //-------------------------------------------------------------------------
++    // The MSB of the phase accumulator provides the FM output.
++    // This creates a square wave at the desired frequency with jitter
++    // of approximately one clock period.
++
++    assign fm_out = phase_accumulator[ACCUMULATOR_WIDTH-1];
++
++    // Debug output for simulation/verification
++    assign phase_out = phase_accumulator;
++
++endmodule
++
++
++//-----------------------------------------------------------------------------
++// Module: note_to_phase_increment
++//
++// Description:
++//   Converts a note pitch (semitone offset from A4) to a phase increment
++//   value for the FM modulator. Uses a lookup table for semitone frequency
++//   ratios and scales by a configurable base increment.
++//
++// Approach:
++//   Since we don't know the clock frequency at design time, we use relative
++//   frequency encoding. The base_phase_increment parameter sets the center
++//   frequency, and note offsets scale this up or down.
++//
++//   For FM transmission, we modulate around a carrier:
++//   phase_inc = base_increment + (note_offset * deviation_per_semitone)
++//
++// Note Frequency Ratios (12-TET, Equal Temperament):
++//   Each semitone is a factor of 2^(1/12) ≈ 1.05946 higher
++//
++//   For small deviations, we approximate:
++//   freq(note) ≈ center_freq * (1 + note_offset * 0.05946)
++//
++// Design Notes:
++//   - Uses multiplication for frequency scaling
++//   - Can be pipelined if timing is critical
++//   - REST note (0x80) outputs zero increment (silence)
++//
++// Author: Based on iCEstick-hacks FM transmitter project
++// Target: GF180MCU ASIC (architecture independent)
++// License: MIT
++//-----------------------------------------------------------------------------
++
++module note_to_phase_increment #(
++    parameter ACCUMULATOR_WIDTH = 32
++)(
++    input  wire                           clk,
++    input  wire                           rst_n,
++    input  wire signed [7:0]              note_pitch,      // Semitones from A4
++    input  wire [ACCUMULATOR_WIDTH-1:0]   base_increment,  // Center freq increment
++    input  wire [ACCUMULATOR_WIDTH-1:0]   deviation_step,  // Freq step per semitone
++    output reg  [ACCUMULATOR_WIDTH-1:0]   phase_increment,
++    output reg                            is_rest
++);
++
++    //-------------------------------------------------------------------------
++    // REST Detection
++    //-------------------------------------------------------------------------
++    localparam signed [7:0] REST_VALUE = 8'h80;
++
++    wire note_is_rest = (note_pitch == REST_VALUE);
++
++    //-------------------------------------------------------------------------
++    // Frequency Calculation
++    //-------------------------------------------------------------------------
++    // For FM modulation, we add/subtract from the carrier frequency
++    // based on the note pitch.
++    //
++    // phase_increment = base_increment + (note_pitch * deviation_step)
++    //
++    // This gives us FM audio tones around the carrier frequency.
++
++    wire signed [39:0] deviation;
++    wire signed [39:0] signed_increment;
++
++    // Calculate deviation: note_pitch * deviation_step
++    // note_pitch is signed (-128 to +127 semitones from A4)
++    assign deviation = $signed(note_pitch) * $signed({1'b0, deviation_step});
++
++    // Add to base increment
++    assign signed_increment = $signed({1'b0, base_increment}) + deviation;
++
++    //-------------------------------------------------------------------------
++    // Output Register (single cycle latency)
++    //-------------------------------------------------------------------------
++    always @(posedge clk or negedge rst_n) begin
++        if (!rst_n) begin
++            phase_increment <= {ACCUMULATOR_WIDTH{1'b0}};
++            is_rest <= 1'b1;
++        end else begin
++            is_rest <= note_is_rest;
++
++            if (note_is_rest) begin
++                // REST: output carrier frequency only (no modulation)
++                // Or could output zero for silence - design choice
++                phase_increment <= base_increment;
++            end else begin
++                // Normal note: apply frequency deviation
++                // Clamp to positive values (can't have negative frequency)
++                if (signed_increment[39]) begin
++                    // Negative result - clamp to zero
++                    phase_increment <= {ACCUMULATOR_WIDTH{1'b0}};
++                end else begin
++                    phase_increment <= signed_increment[ACCUMULATOR_WIDTH-1:0];
++                end
++            end
++        end
++    end
++
++endmodule
+diff --git a/src/fur_elise_fm_top.v b/src/fur_elise_fm_top.v
+new file mode 100644
+index 0000000..830d2a5
+--- /dev/null
++++ b/src/fur_elise_fm_top.v
+@@ -0,0 +1,312 @@
++//-----------------------------------------------------------------------------
++// Module: fur_elise_fm_top
++//
++// Description:
++//   Top-level module for the Für Elise FM transmitter with PWM audio input
++//   capability and optional clock doubling.
++//
++// Features:
++//   - Plays built-in Für Elise melody via FM
++//   - Accepts external PWM audio input for FM transmission
++//   - Optional clock doubling (XOR-based) for higher FM carrier frequency
++//   - Audio frequency output for direct speaker connection
++//   - Phase increment output for debugging/monitoring
++//
++// Operating Modes:
++//   1. Melody Mode (pwm_in tied low or floating):
++//      - Plays Für Elise from internal ROM
++//      - FM output modulated with musical notes
++//
++//   2. PWM Input Mode (pwm_in connected to external source):
++//      - External PWM audio is decoded and transmitted via FM
++//      - Melody playback continues on audio_out
++//
++// Clock Doubling:
++//   - Enabled via clk_2x_enable jumper
++//   - Uses XOR-based edge detection to double clock frequency
++//   - Doubles FM carrier frequency (e.g., 100MHz → ~200MHz effective)
++//   - Useful for reaching higher carrier frequencies without PLL
++//
++// Ports:
++//   clk           - Input clock (~100 MHz expected)
++//   rst_n         - Active-low reset
++//   enable        - Enable playback
++//   loop          - Loop melody continuously
++//   clk_2x_enable - Enable clock doubling (jumper)
++//   pwm_in        - External PWM audio input
++//   fm_out        - FM modulated RF output
++//   audio_out     - Audio frequency output (speaker)
++//   phase_inc_out - Current phase increment (32-bit, for debugging)
++//   playing       - Melody currently playing
++//   melody_end    - Pulse at end of melody
++//
++// Author: Based on iCEstick-hacks FM transmitter project
++// Target: GF180MCU ASIC (architecture independent)
++// License: MIT
++//-----------------------------------------------------------------------------
++
++module fur_elise_fm_top #(
++    //-------------------------------------------------------------------------
++    // Clock Parameters
++    //-------------------------------------------------------------------------
++    parameter CLK_FREQ_HZ = 100_000_000,
++
++    //-------------------------------------------------------------------------
++    // Timing Parameters
++    //-------------------------------------------------------------------------
++    // Base clocks per 16th note at 120 BPM
++    parameter CLOCKS_PER_16TH = CLK_FREQ_HZ / 8,  // 12,500,000 for 100MHz
++
++    //-------------------------------------------------------------------------
++    // FM Modulation Parameters
++    //-------------------------------------------------------------------------
++    // Center frequency = (BASE_PHASE_INCREMENT / 2^32) * CLK_FREQ
++    // For clk/4: BASE_PHASE_INCREMENT = 0x40000000 → 25 MHz with 100 MHz clock
++    parameter [31:0] BASE_PHASE_INCREMENT = 32'h40000000,
++
++    // Deviation per semitone (for melody mode)
++    parameter [31:0] DEVIATION_PER_SEMITONE = 32'h00418937,
++
++    // PWM input deviation scaling
++    // Full scale PWM → ±75 kHz deviation
++    // Phase inc per sample unit = (75000 / CLK_FREQ) * 2^32 / 32768
++    parameter [31:0] PWM_DEVIATION_SCALE = 32'h00009A5E,
++
++    //-------------------------------------------------------------------------
++    // PWM Input Parameters
++    //-------------------------------------------------------------------------
++    parameter PWM_FREQ_HZ = 50_000,  // Expected PWM frequency
++
++    //-------------------------------------------------------------------------
++    // Melody Parameters
++    //-------------------------------------------------------------------------
++    parameter MELODY_LENGTH = 82,
++    parameter ADDR_WIDTH    = 7
++)(
++    //-------------------------------------------------------------------------
++    // Clock and Reset
++    //-------------------------------------------------------------------------
++    input  wire         clk,             // System clock (~100 MHz)
++    input  wire         rst_n,           // Active-low asynchronous reset
++
++    //-------------------------------------------------------------------------
++    // Control Inputs
++    //-------------------------------------------------------------------------
++    input  wire         enable,          // Enable playback
++    input  wire         loop,            // Loop melody continuously
++    input  wire         clk_2x_enable,   // Enable clock doubling (jumper)
++
++    //-------------------------------------------------------------------------
++    // PWM Audio Input
++    //-------------------------------------------------------------------------
++    input  wire         pwm_in,          // External PWM audio input
++
++    //-------------------------------------------------------------------------
++    // Outputs
++    //-------------------------------------------------------------------------
++    output wire         fm_out,          // FM modulated RF output
++    output wire         audio_out,       // Audio frequency output (speaker)
++    output wire [31:0]  phase_inc_out,   // Phase increment (debug/monitoring)
++
++    //-------------------------------------------------------------------------
++    // Status Outputs
++    //-------------------------------------------------------------------------
++    output wire         playing,         // Melody currently playing
++    output wire         melody_end,      // Pulse at end of melody
++    output wire [ADDR_WIDTH-1:0] note_index  // Current note index (debug)
++);
++
++    //=========================================================================
++    // Clock Doubling
++    //=========================================================================
++
++    wire clk_fast;  // Potentially doubled clock
++
++    clock_doubler #(
++        .DELAY_STAGES(8)
++    ) u_clk_doubler (
++        .clk_in  (clk),
++        .enable  (clk_2x_enable),
++        .clk_out (clk_fast)
++    );
++
++    //=========================================================================
++    // PWM Input Decoder
++    //=========================================================================
++
++    wire signed [15:0] pwm_sample;
++    wire pwm_sample_valid;
++    wire [15:0] pwm_debug;
++
++    pwm_input_decoder #(
++        .CLK_FREQ_HZ(CLK_FREQ_HZ),
++        .PWM_FREQ_HZ(PWM_FREQ_HZ),
++        .SAMPLE_BITS(16)
++    ) u_pwm_decoder (
++        .clk         (clk),
++        .rst_n       (rst_n),
++        .enable      (enable),
++        .pwm_in      (pwm_in),
++        .sample_out  (pwm_sample),
++        .sample_valid(pwm_sample_valid),
++        .debug_count (pwm_debug)
++    );
++
++    //=========================================================================
++    // Melody ROM and Sequencer
++    //=========================================================================
++
++    wire [ADDR_WIDTH-1:0] rom_addr;
++    wire [15:0]           rom_data;
++    wire signed [7:0]     current_pitch;
++    wire                  pitch_valid;
++    wire                  sequencer_playing;
++    wire                  sequencer_melody_end;
++
++    melody_rom #(
++        .MELODY_LENGTH(MELODY_LENGTH),
++        .ADDR_WIDTH(ADDR_WIDTH)
++    ) u_melody_rom (
++        .clk    (clk),
++        .addr   (rom_addr),
++        .data   (rom_data)
++    );
++
++    melody_sequencer #(
++        .CLOCKS_PER_16TH(CLOCKS_PER_16TH),
++        .MELODY_LENGTH(MELODY_LENGTH),
++        .ADDR_WIDTH(ADDR_WIDTH)
++    ) u_sequencer (
++        .clk         (clk),
++        .rst_n       (rst_n),
++        .enable      (enable),
++        .loop        (loop),
++        .tempo_clocks(32'd0),  // Use default tempo
++        .note_data   (rom_data),
++        .note_addr   (rom_addr),
++        .note_pitch  (current_pitch),
++        .note_valid  (pitch_valid),
++        .playing     (sequencer_playing),
++        .melody_end  (sequencer_melody_end)
++    );
++
++    //=========================================================================
++    // Note to Phase Increment (for melody)
++    //=========================================================================
++
++    wire [31:0] melody_phase_increment;
++    wire        melody_is_rest;
++
++    note_to_phase_increment #(
++        .ACCUMULATOR_WIDTH(32)
++    ) u_note_to_freq (
++        .clk             (clk),
++        .rst_n           (rst_n),
++        .note_pitch      (current_pitch),
++        .base_increment  (BASE_PHASE_INCREMENT),
++        .deviation_step  (DEVIATION_PER_SEMITONE),
++        .phase_increment (melody_phase_increment),
++        .is_rest         (melody_is_rest)
++    );
++
++    //=========================================================================
++    // PWM to Phase Increment Conversion
++    //=========================================================================
++    // Convert PWM sample to FM deviation
++    // phase_increment = BASE_PHASE_INCREMENT + (pwm_sample * PWM_DEVIATION_SCALE)
++
++    reg [31:0] pwm_phase_increment;
++    reg pwm_active;
++
++    // Detect if PWM input is active (has valid samples)
++    reg [7:0] pwm_timeout_counter;
++    localparam PWM_TIMEOUT = 255;
++
++    always @(posedge clk or negedge rst_n) begin
++        if (!rst_n) begin
++            pwm_timeout_counter <= 0;
++            pwm_active <= 1'b0;
++        end else begin
++            if (pwm_sample_valid) begin
++                pwm_timeout_counter <= PWM_TIMEOUT;
++                pwm_active <= 1'b1;
++            end else if (pwm_timeout_counter > 0) begin
++                pwm_timeout_counter <= pwm_timeout_counter - 1;
++            end else begin
++                pwm_active <= 1'b0;
++            end
++        end
++    end
++
++    // Calculate PWM-based phase increment
++    wire signed [47:0] pwm_deviation;
++    assign pwm_deviation = $signed(pwm_sample) * $signed({1'b0, PWM_DEVIATION_SCALE});
++
++    wire [31:0] pwm_phase_calc;
++    assign pwm_phase_calc = BASE_PHASE_INCREMENT + pwm_deviation[47:16];
++
++    always @(posedge clk or negedge rst_n) begin
++        if (!rst_n) begin
++            pwm_phase_increment <= BASE_PHASE_INCREMENT;
++        end else if (pwm_sample_valid) begin
++            pwm_phase_increment <= pwm_phase_calc;
++        end
++    end
++
++    //=========================================================================
++    // Phase Increment Selection
++    //=========================================================================
++    // Use PWM input when active, otherwise use melody
++
++    wire [31:0] selected_phase_increment;
++    assign selected_phase_increment = pwm_active ? pwm_phase_increment : melody_phase_increment;
++
++    // Output phase increment for debugging/monitoring
++    assign phase_inc_out = selected_phase_increment;
++
++    //=========================================================================
++    // FM Modulator (using fast clock)
++    //=========================================================================
++
++    wire fm_raw_out;
++
++    fm_modulator #(
++        .ACCUMULATOR_WIDTH(32)
++    ) u_fm_mod (
++        .clk             (clk_fast),          // Use doubled clock when enabled
++        .rst_n           (rst_n),
++        .enable          (enable & (pitch_valid | pwm_active)),
++        .phase_increment (selected_phase_increment),
++        .fm_out          (fm_raw_out),
++        .phase_out       ()
++    );
++
++    assign fm_out = fm_raw_out;
++
++    //=========================================================================
++    // Audio Tone Generator (for speaker output)
++    //=========================================================================
++    // Always plays melody regardless of PWM input
++
++    audio_tone_generator #(
++        .CLK_FREQ_HZ(CLK_FREQ_HZ),
++        .ACCUMULATOR_WIDTH(32)
++    ) u_audio_gen (
++        .clk        (clk),
++        .rst_n      (rst_n),
++        .enable     (enable),
++        .note_pitch (current_pitch),
++        .note_valid (pitch_valid),
++        .audio_out  (audio_out),
++        .audio_pwm  ()
++    );
++
++    //=========================================================================
++    // Status Outputs
++    //=========================================================================
++
++    assign playing    = sequencer_playing;
++    assign melody_end = sequencer_melody_end;
++    assign note_index = rom_addr;
++
++endmodule
+diff --git a/src/melody_rom.v b/src/melody_rom.v
+new file mode 100644
+index 0000000..605fe91
+--- /dev/null
++++ b/src/melody_rom.v
+@@ -0,0 +1,220 @@
++//-----------------------------------------------------------------------------
++// Module: melody_rom
++//
++// Description:
++//   Read-only memory containing Beethoven's "Für Elise" melody encoded as
++//   note data. Each entry contains a note pitch (as semitone offset from A4)
++//   and duration code.
++//
++// Design Notes:
++//   - Architecture independent (no vendor primitives)
++//   - Synthesizes to LUT-based ROM
++//   - Notes encoded as signed offset from A4 (440 Hz)
++//   - Duration encoded as power-of-2 multiplier
++//
++// Encoding Format:
++//   [15:8] = Note pitch (signed, semitones from A4, 0x80 = REST)
++//   [7:6]  = Reserved
++//   [5:0]  = Duration code (0=16th, 1=8th, 2=quarter, 3=half, 4=whole, etc.)
++//
++// Note Reference (semitones from A4):
++//   C4  = -9    D4  = -7    E4  = -5    F4  = -4
++//   G4  = -2    G#4 = -1    A4  =  0    A#4 = +1
++//   B4  = +2    C5  = +3    D5  = +5    D#5 = +6
++//   E5  = +7    F5  = +8    G5  = +10   A5  = +12
++//
++// Author: Based on iCEstick-hacks FM transmitter project
++// Target: GF180MCU ASIC (architecture independent)
++// License: MIT
++//-----------------------------------------------------------------------------
++
++module melody_rom #(
++    parameter MELODY_LENGTH = 128,           // Number of notes in melody
++    parameter ADDR_WIDTH    = 7              // log2(MELODY_LENGTH)
++)(
++    input  wire                    clk,
++    input  wire [ADDR_WIDTH-1:0]   addr,
++    output reg  [15:0]             data
++);
++
++    //-------------------------------------------------------------------------
++    // Note Definitions (semitones from A4 = 440 Hz)
++    //-------------------------------------------------------------------------
++    localparam signed [7:0] REST = 8'h80;    // Special: silence
++    localparam signed [7:0] C4   = -8'd9;
++    localparam signed [7:0] D4   = -8'd7;
++    localparam signed [7:0] E4   = -8'd5;
++    localparam signed [7:0] F4   = -8'd4;
++    localparam signed [7:0] G4   = -8'd2;
++    localparam signed [7:0] Gs4  = -8'd1;    // G#4
++    localparam signed [7:0] A4   =  8'd0;
++    localparam signed [7:0] As4  =  8'd1;    // A#4
++    localparam signed [7:0] B4   =  8'd2;
++    localparam signed [7:0] C5   =  8'd3;
++    localparam signed [7:0] D5   =  8'd5;
++    localparam signed [7:0] Ds5  =  8'd6;    // D#5
++    localparam signed [7:0] E5   =  8'd7;
++    localparam signed [7:0] F5   =  8'd8;
++    localparam signed [7:0] G5   =  8'd10;
++    localparam signed [7:0] A5   =  8'd12;
++
++    //-------------------------------------------------------------------------
++    // Duration Definitions
++    //-------------------------------------------------------------------------
++    localparam [5:0] DUR_16TH    = 6'd0;     // Sixteenth note
++    localparam [5:0] DUR_8TH     = 6'd1;     // Eighth note
++    localparam [5:0] DUR_QUARTER = 6'd2;     // Quarter note
++    localparam [5:0] DUR_HALF    = 6'd3;     // Half note
++    localparam [5:0] DUR_WHOLE   = 6'd4;     // Whole note
++    localparam [5:0] DUR_DOT8TH  = 6'd5;     // Dotted eighth (1.5x eighth)
++
++    //-------------------------------------------------------------------------
++    // Helper function to encode note
++    //-------------------------------------------------------------------------
++    function [15:0] note;
++        input signed [7:0] pitch;
++        input [5:0] duration;
++        begin
++            note = {pitch, 2'b00, duration};
++        end
++    endfunction
++
++    //-------------------------------------------------------------------------
++    // Melody ROM - Für Elise (Opening Theme)
++    // The famous A-section repeated, with some of B-section
++    //-------------------------------------------------------------------------
++    always @(posedge clk) begin
++        case (addr)
++            //=================================================================
++            // A Section - First phrase (bars 1-4)
++            // E5 D#5 E5 D#5 E5 B4 D5 C5 A4
++            //=================================================================
++            7'd0:  data <= note(E5,   DUR_8TH);      // E5
++            7'd1:  data <= note(Ds5,  DUR_8TH);      // D#5
++            7'd2:  data <= note(E5,   DUR_8TH);      // E5
++            7'd3:  data <= note(Ds5,  DUR_8TH);      // D#5
++            7'd4:  data <= note(E5,   DUR_8TH);      // E5
++            7'd5:  data <= note(B4,   DUR_8TH);      // B4
++            7'd6:  data <= note(D5,   DUR_8TH);      // D5
++            7'd7:  data <= note(C5,   DUR_8TH);      // C5
++            7'd8:  data <= note(A4,   DUR_QUARTER);  // A4 (longer)
++            7'd9:  data <= note(REST, DUR_8TH);      // Rest
++
++            //=================================================================
++            // A Section - Second phrase (bars 5-8)
++            // C4 E4 A4 B4 (rest) E4 G#4 B4 C5
++            //=================================================================
++            7'd10: data <= note(C4,   DUR_8TH);      // C4
++            7'd11: data <= note(E4,   DUR_8TH);      // E4
++            7'd12: data <= note(A4,   DUR_8TH);      // A4
++            7'd13: data <= note(B4,   DUR_QUARTER);  // B4 (longer)
++            7'd14: data <= note(REST, DUR_8TH);      // Rest
++            7'd15: data <= note(E4,   DUR_8TH);      // E4
++            7'd16: data <= note(Gs4,  DUR_8TH);      // G#4
++            7'd17: data <= note(B4,   DUR_8TH);      // B4
++            7'd18: data <= note(C5,   DUR_QUARTER);  // C5 (longer)
++            7'd19: data <= note(REST, DUR_8TH);      // Rest
++
++            //=================================================================
++            // A Section - Third phrase (bars 9-12) - repeat of first
++            // E4 E5 D#5 E5 D#5 E5 B4 D5 C5 A4
++            //=================================================================
++            7'd20: data <= note(E4,   DUR_8TH);      // E4
++            7'd21: data <= note(E5,   DUR_8TH);      // E5
++            7'd22: data <= note(Ds5,  DUR_8TH);      // D#5
++            7'd23: data <= note(E5,   DUR_8TH);      // E5
++            7'd24: data <= note(Ds5,  DUR_8TH);      // D#5
++            7'd25: data <= note(E5,   DUR_8TH);      // E5
++            7'd26: data <= note(B4,   DUR_8TH);      // B4
++            7'd27: data <= note(D5,   DUR_8TH);      // D5
++            7'd28: data <= note(C5,   DUR_8TH);      // C5
++            7'd29: data <= note(A4,   DUR_QUARTER);  // A4 (longer)
++            7'd30: data <= note(REST, DUR_8TH);      // Rest
++
++            //=================================================================
++            // A Section - Fourth phrase (bars 13-16)
++            // C4 E4 A4 B4 (rest) E4 C5 B4 A4
++            //=================================================================
++            7'd31: data <= note(C4,   DUR_8TH);      // C4
++            7'd32: data <= note(E4,   DUR_8TH);      // E4
++            7'd33: data <= note(A4,   DUR_8TH);      // A4
++            7'd34: data <= note(B4,   DUR_QUARTER);  // B4 (longer)
++            7'd35: data <= note(REST, DUR_8TH);      // Rest
++            7'd36: data <= note(E4,   DUR_8TH);      // E4
++            7'd37: data <= note(C5,   DUR_8TH);      // C5
++            7'd38: data <= note(B4,   DUR_8TH);      // B4
++            7'd39: data <= note(A4,   DUR_HALF);     // A4 (end of A section)
++            7'd40: data <= note(REST, DUR_QUARTER);  // Rest
++
++            //=================================================================
++            // A Section Repeat - First phrase again
++            //=================================================================
++            7'd41: data <= note(E5,   DUR_8TH);      // E5
++            7'd42: data <= note(Ds5,  DUR_8TH);      // D#5
++            7'd43: data <= note(E5,   DUR_8TH);      // E5
++            7'd44: data <= note(Ds5,  DUR_8TH);      // D#5
++            7'd45: data <= note(E5,   DUR_8TH);      // E5
++            7'd46: data <= note(B4,   DUR_8TH);      // B4
++            7'd47: data <= note(D5,   DUR_8TH);      // D5
++            7'd48: data <= note(C5,   DUR_8TH);      // C5
++            7'd49: data <= note(A4,   DUR_QUARTER);  // A4
++            7'd50: data <= note(REST, DUR_8TH);      // Rest
++
++            //=================================================================
++            // A Section Repeat - Second phrase
++            //=================================================================
++            7'd51: data <= note(C4,   DUR_8TH);      // C4
++            7'd52: data <= note(E4,   DUR_8TH);      // E4
++            7'd53: data <= note(A4,   DUR_8TH);      // A4
++            7'd54: data <= note(B4,   DUR_QUARTER);  // B4
++            7'd55: data <= note(REST, DUR_8TH);      // Rest
++            7'd56: data <= note(E4,   DUR_8TH);      // E4
++            7'd57: data <= note(Gs4,  DUR_8TH);      // G#4
++            7'd58: data <= note(B4,   DUR_8TH);      // B4
++            7'd59: data <= note(C5,   DUR_QUARTER);  // C5
++            7'd60: data <= note(REST, DUR_8TH);      // Rest
++
++            //=================================================================
++            // A Section Repeat - Third phrase
++            //=================================================================
++            7'd61: data <= note(E4,   DUR_8TH);      // E4
++            7'd62: data <= note(E5,   DUR_8TH);      // E5
++            7'd63: data <= note(Ds5,  DUR_8TH);      // D#5
++            7'd64: data <= note(E5,   DUR_8TH);      // E5
++            7'd65: data <= note(Ds5,  DUR_8TH);      // D#5
++            7'd66: data <= note(E5,   DUR_8TH);      // E5
++            7'd67: data <= note(B4,   DUR_8TH);      // B4
++            7'd68: data <= note(D5,   DUR_8TH);      // D5
++            7'd69: data <= note(C5,   DUR_8TH);      // C5
++            7'd70: data <= note(A4,   DUR_QUARTER);  // A4
++            7'd71: data <= note(REST, DUR_8TH);      // Rest
++
++            //=================================================================
++            // A Section Repeat - Fourth phrase (ending)
++            //=================================================================
++            7'd72: data <= note(C4,   DUR_8TH);      // C4
++            7'd73: data <= note(E4,   DUR_8TH);      // E4
++            7'd74: data <= note(A4,   DUR_8TH);      // A4
++            7'd75: data <= note(B4,   DUR_QUARTER);  // B4
++            7'd76: data <= note(REST, DUR_8TH);      // Rest
++            7'd77: data <= note(E4,   DUR_8TH);      // E4
++            7'd78: data <= note(C5,   DUR_8TH);      // C5
++            7'd79: data <= note(B4,   DUR_8TH);      // B4
++            7'd80: data <= note(A4,   DUR_WHOLE);    // A4 (final note)
++
++            //=================================================================
++            // End marker and padding
++            //=================================================================
++            7'd81: data <= note(REST, DUR_WHOLE);    // Final rest
++
++            // Padding with rests for remaining addresses
++            default: data <= note(REST, DUR_QUARTER);
++        endcase
++    end
++
++    //-------------------------------------------------------------------------
++    // Melody length output for sequencer
++    //-------------------------------------------------------------------------
++    // The actual melody ends at address 81 (82 notes total)
++
++endmodule
+diff --git a/src/melody_sequencer.v b/src/melody_sequencer.v
+new file mode 100644
+index 0000000..cdf103e
+--- /dev/null
++++ b/src/melody_sequencer.v
+@@ -0,0 +1,255 @@
++//-----------------------------------------------------------------------------
++// Module: melody_sequencer
++//
++// Description:
++//   Controls playback of the melody stored in the ROM. Manages timing for
++//   note durations and sequences through the melody. Supports looping and
++//   enable/disable control.
++//
++// Features:
++//   - Configurable base note duration (tempo control)
++//   - Duration decoding (16th, 8th, quarter, half, whole notes)
++//   - Loop mode for continuous playback
++//   - Play/pause control via enable input
++//   - End-of-melody detection
++//
++// Timing Calculation:
++//   Base duration is set by CLOCKS_PER_16TH parameter.
++//   Other durations are multiples:
++//     16th note = 1 × base
++//     8th note  = 2 × base
++//     Quarter   = 4 × base
++//     Half      = 8 × base
++//     Whole     = 16 × base
++//
++// Example (100 MHz clock, 120 BPM tempo):
++//   Quarter note = 60/120 = 0.5 seconds = 50,000,000 clocks
++//   16th note = 0.5/4 = 0.125 seconds = 12,500,000 clocks
++//   CLOCKS_PER_16TH = 12,500,000
++//
++// Design Notes:
++//   - Architecture independent (pure behavioral Verilog)
++//   - Single clock domain
++//   - Fully synchronous with async reset
++//   - Suitable for ASIC synthesis (GF180MCU target)
++//
++// Author: Based on iCEstick-hacks FM transmitter project
++// Target: GF180MCU ASIC (architecture independent)
++// License: MIT
++//-----------------------------------------------------------------------------
++
++module melody_sequencer #(
++    parameter CLOCKS_PER_16TH = 12_500_000,  // Default clock cycles per 16th note
++    parameter MELODY_LENGTH   = 82,          // Number of notes in melody
++    parameter ADDR_WIDTH      = 7            // log2(max melody length)
++)(
++    input  wire                    clk,
++    input  wire                    rst_n,
++    input  wire                    enable,      // Enable playback
++    input  wire                    loop,        // Loop at end of melody
++    input  wire [31:0]             tempo_clocks,// Runtime tempo (clocks per 16th)
++                                               // If 0, uses CLOCKS_PER_16TH parameter
++    input  wire [15:0]             note_data,   // Data from melody ROM
++    output reg  [ADDR_WIDTH-1:0]   note_addr,   // Address to melody ROM
++    output reg  signed [7:0]       note_pitch,  // Current note pitch
++    output reg                     note_valid,  // Note pitch is valid
++    output reg                     playing,     // Melody is currently playing
++    output wire                    melody_end   // Pulse at end of melody
++);
++
++    //-------------------------------------------------------------------------
++    // State Machine States
++    //-------------------------------------------------------------------------
++    localparam STATE_IDLE     = 2'd0;  // Waiting for enable
++    localparam STATE_FETCH    = 2'd1;  // Fetching note from ROM
++    localparam STATE_PLAY     = 2'd2;  // Playing current note
++    localparam STATE_NEXT     = 2'd3;  // Advancing to next note
++
++    reg [1:0] state;
++    reg [1:0] state_next;
++
++    //-------------------------------------------------------------------------
++    // Duration Decoding
++    //-------------------------------------------------------------------------
++    // Duration codes from ROM:
++    //   0 = 16th,  1 = 8th,  2 = quarter,  3 = half,  4 = whole
++    //   5 = dotted 8th (1.5x 8th)
++
++    localparam [5:0] DUR_16TH    = 6'd0;
++    localparam [5:0] DUR_8TH     = 6'd1;
++    localparam [5:0] DUR_QUARTER = 6'd2;
++    localparam [5:0] DUR_HALF    = 6'd3;
++    localparam [5:0] DUR_WHOLE   = 6'd4;
++    localparam [5:0] DUR_DOT8TH  = 6'd5;
++
++    // Duration multipliers (relative to 16th note)
++    function [4:0] duration_multiplier;
++        input [5:0] dur_code;
++        begin
++            case (dur_code)
++                DUR_16TH:    duration_multiplier = 5'd1;   // 1x
++                DUR_8TH:     duration_multiplier = 5'd2;   // 2x
++                DUR_QUARTER: duration_multiplier = 5'd4;   // 4x
++                DUR_HALF:    duration_multiplier = 5'd8;   // 8x
++                DUR_WHOLE:   duration_multiplier = 5'd16;  // 16x
++                DUR_DOT8TH:  duration_multiplier = 5'd3;   // 1.5x 8th = 3x 16th
++                default:     duration_multiplier = 5'd2;   // Default to 8th
++            endcase
++        end
++    endfunction
++
++    //-------------------------------------------------------------------------
++    // Timing Counter
++    //-------------------------------------------------------------------------
++    // Counts clock cycles for note duration
++
++    reg [31:0] duration_counter;
++    wire [31:0] target_duration;
++    wire duration_done;
++
++    // Extract duration code from note data
++    wire [5:0] note_duration = note_data[5:0];
++    wire [4:0] dur_mult = duration_multiplier(note_duration);
++
++    // Calculate target duration in clock cycles
++    // Use runtime tempo if provided, otherwise use parameter default
++    wire [31:0] active_tempo = (tempo_clocks != 32'd0) ? tempo_clocks : CLOCKS_PER_16TH;
++    assign target_duration = active_tempo * dur_mult;
++
++    // Duration complete when counter reaches target
++    assign duration_done = (duration_counter >= target_duration - 1);
++
++    //-------------------------------------------------------------------------
++    // Note Address Counter
++    //-------------------------------------------------------------------------
++    reg melody_finished;
++    assign melody_end = melody_finished;
++
++    //-------------------------------------------------------------------------
++    // State Machine - Sequential
++    //-------------------------------------------------------------------------
++    always @(posedge clk or negedge rst_n) begin
++        if (!rst_n) begin
++            state <= STATE_IDLE;
++        end else begin
++            state <= state_next;
++        end
++    end
++
++    //-------------------------------------------------------------------------
++    // State Machine - Combinational
++    //-------------------------------------------------------------------------
++    always @(*) begin
++        state_next = state;
++
++        case (state)
++            STATE_IDLE: begin
++                if (enable) begin
++                    state_next = STATE_FETCH;
++                end
++            end
++
++            STATE_FETCH: begin
++                // ROM has 1-cycle latency, wait for data
++                state_next = STATE_PLAY;
++            end
++
++            STATE_PLAY: begin
++                if (!enable) begin
++                    state_next = STATE_IDLE;
++                end else if (duration_done) begin
++                    state_next = STATE_NEXT;
++                end
++            end
++
++            STATE_NEXT: begin
++                if (note_addr >= MELODY_LENGTH - 1) begin
++                    if (loop) begin
++                        state_next = STATE_FETCH;  // Loop back to start
++                    end else begin
++                        state_next = STATE_IDLE;   // Stop at end
++                    end
++                end else begin
++                    state_next = STATE_FETCH;      // Next note
++                end
++            end
++
++            default: begin
++                state_next = STATE_IDLE;
++            end
++        endcase
++    end
++
++    //-------------------------------------------------------------------------
++    // Datapath - Sequential
++    //-------------------------------------------------------------------------
++    always @(posedge clk or negedge rst_n) begin
++        if (!rst_n) begin
++            note_addr        <= {ADDR_WIDTH{1'b0}};
++            note_pitch       <= 8'h80;  // REST
++            note_valid       <= 1'b0;
++            playing          <= 1'b0;
++            melody_finished  <= 1'b0;
++            duration_counter <= 32'd0;
++        end else begin
++            // Default: clear one-cycle pulses
++            melody_finished <= 1'b0;
++
++            case (state)
++                STATE_IDLE: begin
++                    playing <= 1'b0;
++                    note_valid <= 1'b0;
++                    duration_counter <= 32'd0;
++
++                    if (enable) begin
++                        // Starting playback, reset to beginning
++                        note_addr <= {ADDR_WIDTH{1'b0}};
++                    end
++                end
++
++                STATE_FETCH: begin
++                    // Waiting for ROM data (1 cycle latency)
++                    // ROM address is already set
++                    playing <= 1'b1;
++                    note_valid <= 1'b0;
++                    duration_counter <= 32'd0;
++                end
++
++                STATE_PLAY: begin
++                    // Latch note data from ROM
++                    note_pitch <= note_data[15:8];
++                    note_valid <= 1'b1;
++                    playing <= 1'b1;
++
++                    // Count duration
++                    if (!duration_done) begin
++                        duration_counter <= duration_counter + 1;
++                    end
++                end
++
++                STATE_NEXT: begin
++                    // Advance to next note
++                    note_valid <= 1'b0;
++                    duration_counter <= 32'd0;
++
++                    if (note_addr >= MELODY_LENGTH - 1) begin
++                        if (loop) begin
++                            note_addr <= {ADDR_WIDTH{1'b0}};  // Restart
++                        end else begin
++                            melody_finished <= 1'b1;
++                        end
++                    end else begin
++                        note_addr <= note_addr + 1;
++                    end
++                end
++
++                default: begin
++                    note_addr <= {ADDR_WIDTH{1'b0}};
++                    note_valid <= 1'b0;
++                    playing <= 1'b0;
++                end
++            endcase
++        end
++    end
++
++endmodule
+diff --git a/src/project.v b/src/project.v
+index cd6f740..9274509 100644
+--- a/src/project.v
++++ b/src/project.v
+@@ -1,11 +1,35 @@
+ /*
+- * Copyright (c) 2024 Your Name
++ * Copyright (c) 2024 r4d10n
+  * SPDX-License-Identifier: Apache-2.0
+  */
+ 
+ `default_nettype none
+ 
+-module tt_um_example (
++//-----------------------------------------------------------------------------
++// Module: tt_um_tone_fm_tx
++//
++// Description:
++//   TinyTapeout wrapper for audio tone generator and FM transmitter.
++//   Plays musical melodies via FM modulation with DDS.
++//
++// Pin Mapping:
++//   ui_in[0]   = enable      - Enable playback
++//   ui_in[1]   = loop        - Loop melody continuously
++//   ui_in[2]   = clk_2x_en   - Enable clock doubling
++//   ui_in[3]   = pwm_in      - External PWM audio input
++//   ui_in[7:4] = reserved
++//
++//   uo_out[0]  = fm_out      - FM modulated RF output
++//   uo_out[1]  = audio_out   - Audio frequency output (speaker)
++//   uo_out[2]  = playing     - Melody currently playing
++//   uo_out[3]  = melody_end  - Pulse at end of melody
++//   uo_out[7:4]= note_index[3:0] - Current note index (debug)
++//
++//   uio[7:0]   = phase_inc[31:24] - Phase increment MSB (output mode)
++//
++//-----------------------------------------------------------------------------
++
++module tt_um_tone_fm_tx (
+     input  wire [7:0] ui_in,    // Dedicated inputs
+     output wire [7:0] uo_out,   // Dedicated outputs
+     input  wire [7:0] uio_in,   // IOs: Input path
+@@ -16,12 +40,61 @@ module tt_um_example (
+     input  wire       rst_n     // reset_n - low to reset
+ );
+ 
+-  // All output pins must be assigned. If not used, assign to 0.
+-  assign uo_out  = ui_in + uio_in;  // Example: ou_out is the sum of ui_in and uio_in
+-  assign uio_out = 0;
+-  assign uio_oe  = 0;
++    //=========================================================================
++    // Input Mapping
++    //=========================================================================
++    wire enable      = ui_in[0] & ena;
++    wire loop        = ui_in[1];
++    wire clk_2x_en   = ui_in[2];
++    wire pwm_in      = ui_in[3];
++
++    //=========================================================================
++    // Internal Signals
++    //=========================================================================
++    wire        fm_out;
++    wire        audio_out;
++    wire [31:0] phase_inc_out;
++    wire        playing;
++    wire        melody_end;
++    wire [6:0]  note_index;
++
++    //=========================================================================
++    // FM Transmitter Core
++    //=========================================================================
++    fur_elise_fm_top #(
++        .CLK_FREQ_HZ(50_000_000),           // TinyTapeout clock is ~50 MHz
++        .CLOCKS_PER_16TH(50_000_000 / 8),   // 120 BPM
++        .MELODY_LENGTH(82),
++        .PWM_FREQ_HZ(50_000)
++    ) u_fur_elise (
++        .clk           (clk),
++        .rst_n         (rst_n),
++        .enable        (enable),
++        .loop          (loop),
++        .clk_2x_enable (clk_2x_en),
++        .pwm_in        (pwm_in),
++        .fm_out        (fm_out),
++        .audio_out     (audio_out),
++        .phase_inc_out (phase_inc_out),
++        .playing       (playing),
++        .melody_end    (melody_end),
++        .note_index    (note_index)
++    );
++
++    //=========================================================================
++    // Output Mapping
++    //=========================================================================
++    assign uo_out[0] = fm_out;
++    assign uo_out[1] = audio_out;
++    assign uo_out[2] = playing;
++    assign uo_out[3] = melody_end;
++    assign uo_out[7:4] = note_index[3:0];
++
++    // Bidirectional IOs used as outputs for phase increment MSB
++    assign uio_out = phase_inc_out[31:24];
++    assign uio_oe  = 8'hFF;  // All outputs
+ 
+-  // List all unused inputs to prevent warnings
+-  wire _unused = &{ena, clk, rst_n, 1'b0};
++    // Suppress unused input warnings
++    wire _unused = &{uio_in, note_index[6:4], 1'b0};
+ 
+ endmodule
+diff --git a/src/pwm_input_decoder.v b/src/pwm_input_decoder.v
+new file mode 100644
+index 0000000..ee49e8d
+--- /dev/null
++++ b/src/pwm_input_decoder.v
+@@ -0,0 +1,185 @@
++//-----------------------------------------------------------------------------
++// Module: pwm_input_decoder
++//
++// Description:
++//   Decodes a PWM (Pulse Width Modulation) input signal into a digital sample
++//   value. The PWM duty cycle is converted to a signed 16-bit audio sample.
++//
++// Theory of Operation:
++//   PWM encodes amplitude as pulse width:
++//   - 0% duty cycle   → minimum value (-32768)
++//   - 50% duty cycle  → zero (0)
++//   - 100% duty cycle → maximum value (+32767)
++//
++//   The decoder counts clock cycles while PWM is high during each PWM period,
++//   then converts this count to a signed sample value.
++//
++// PWM Input Specification:
++//   - Expected PWM frequency: 20 kHz - 100 kHz typical
++//   - Higher PWM frequency = better audio quality but lower resolution
++//   - For 100 MHz clock and 50 kHz PWM: 2000 counts per period = ~11 bit resolution
++//
++// Usage:
++//   - Connect external PWM audio source to pwm_in
++//   - sample_out provides 16-bit signed audio sample
++//   - sample_valid pulses when new sample is ready
++//
++// Author: Based on iCEstick-hacks FM transmitter project
++// Target: GF180MCU ASIC (architecture independent)
++// License: MIT
++//-----------------------------------------------------------------------------
++
++module pwm_input_decoder #(
++    parameter CLK_FREQ_HZ = 100_000_000,   // System clock frequency
++    parameter PWM_FREQ_HZ = 50_000,         // Expected PWM frequency
++    parameter SAMPLE_BITS = 16              // Output sample width
++)(
++    input  wire                      clk,
++    input  wire                      rst_n,
++    input  wire                      enable,
++    input  wire                      pwm_in,        // PWM input signal
++    output reg  signed [SAMPLE_BITS-1:0] sample_out,   // Decoded audio sample
++    output reg                       sample_valid,  // New sample ready
++    output wire [15:0]               debug_count    // Debug: PWM high count
++);
++
++    //-------------------------------------------------------------------------
++    // Constants
++    //-------------------------------------------------------------------------
++    // Maximum count per PWM period
++    localparam MAX_COUNT = CLK_FREQ_HZ / PWM_FREQ_HZ;  // e.g., 100M/50k = 2000
++    localparam COUNT_WIDTH = $clog2(MAX_COUNT + 1);
++
++    // Timeout for edge detection (if no edges, assume DC input)
++    localparam TIMEOUT_COUNT = MAX_COUNT * 2;
++
++    //-------------------------------------------------------------------------
++    // Input Synchronization
++    //-------------------------------------------------------------------------
++    reg pwm_sync1, pwm_sync2, pwm_sync3;
++
++    always @(posedge clk or negedge rst_n) begin
++        if (!rst_n) begin
++            pwm_sync1 <= 1'b0;
++            pwm_sync2 <= 1'b0;
++            pwm_sync3 <= 1'b0;
++        end else begin
++            pwm_sync1 <= pwm_in;
++            pwm_sync2 <= pwm_sync1;
++            pwm_sync3 <= pwm_sync2;
++        end
++    end
++
++    wire pwm_rising  = pwm_sync2 & ~pwm_sync3;
++    wire pwm_falling = ~pwm_sync2 & pwm_sync3;
++    wire pwm_level   = pwm_sync2;
++
++    //-------------------------------------------------------------------------
++    // PWM Period and High-Time Counters
++    //-------------------------------------------------------------------------
++    reg [COUNT_WIDTH:0] period_counter;   // Total period count
++    reg [COUNT_WIDTH:0] high_counter;     // High time count
++    reg [COUNT_WIDTH:0] captured_high;    // Captured high count
++    reg [COUNT_WIDTH:0] captured_period;  // Captured period count
++    reg measuring;                         // Currently measuring
++
++    always @(posedge clk or negedge rst_n) begin
++        if (!rst_n) begin
++            period_counter <= 0;
++            high_counter <= 0;
++            captured_high <= 0;
++            captured_period <= MAX_COUNT;  // Default to expected period
++            measuring <= 1'b0;
++            sample_valid <= 1'b0;
++        end else if (!enable) begin
++            period_counter <= 0;
++            high_counter <= 0;
++            measuring <= 1'b0;
++            sample_valid <= 1'b0;
++        end else begin
++            sample_valid <= 1'b0;  // Default
++
++            // Increment period counter
++            if (period_counter < TIMEOUT_COUNT) begin
++                period_counter <= period_counter + 1;
++            end
++
++            // Count high time
++            if (pwm_level && period_counter < TIMEOUT_COUNT) begin
++                high_counter <= high_counter + 1;
++            end
++
++            // Detect rising edge - start of new period
++            if (pwm_rising) begin
++                if (measuring) begin
++                    // End of period - capture measurements
++                    captured_high <= high_counter;
++                    captured_period <= period_counter;
++                    sample_valid <= 1'b1;
++                end
++                // Start new period
++                period_counter <= 0;
++                high_counter <= 0;
++                measuring <= 1'b1;
++            end
++
++            // Timeout - no edges detected, assume DC
++            if (period_counter >= TIMEOUT_COUNT) begin
++                if (pwm_level) begin
++                    // Constant high - maximum value
++                    captured_high <= MAX_COUNT;
++                    captured_period <= MAX_COUNT;
++                end else begin
++                    // Constant low - minimum value
++                    captured_high <= 0;
++                    captured_period <= MAX_COUNT;
++                end
++                sample_valid <= measuring;  // Only pulse if we were measuring
++                measuring <= 1'b0;
++            end
++        end
++    end
++
++    //-------------------------------------------------------------------------
++    // Duty Cycle to Sample Conversion
++    //-------------------------------------------------------------------------
++    // Convert duty cycle (0-100%) to signed sample (-32768 to +32767)
++    //
++    // duty_ratio = captured_high / captured_period  (0.0 to 1.0)
++    // sample = (duty_ratio - 0.5) * 65535
++    //        = (captured_high * 65536 / captured_period) - 32768
++    //
++    // Using fixed-point arithmetic to avoid division:
++    // sample = (captured_high << 16) / captured_period - 32768
++
++    wire [COUNT_WIDTH+16:0] scaled_high = {captured_high, 16'b0};  // high << 16
++    wire [COUNT_WIDTH+16:0] duty_scaled;
++
++    // Simple division approximation (shift-based for synthesis)
++    // For accurate division, use iterative divider or lookup table
++    // Here we use the fact that period is relatively constant
++
++    // Approximate: assume period ≈ MAX_COUNT for simplicity
++    // duty_scaled ≈ (captured_high << 16) >> log2(MAX_COUNT)
++    // For MAX_COUNT = 2000, log2(2000) ≈ 11
++
++    localparam PERIOD_SHIFT = $clog2(MAX_COUNT);
++
++    wire [31:0] duty_approx = scaled_high >> PERIOD_SHIFT;
++
++    // Convert to signed: subtract 32768 (0x8000)
++    wire signed [SAMPLE_BITS-1:0] sample_calc = duty_approx[SAMPLE_BITS-1:0] - 16'sd32768;
++
++    // Register the output
++    always @(posedge clk or negedge rst_n) begin
++        if (!rst_n) begin
++            sample_out <= 16'sd0;
++        end else if (sample_valid) begin
++            sample_out <= sample_calc;
++        end
++    end
++
++    // Debug output
++    assign debug_count = captured_high[15:0];
++
++endmodule
+diff --git a/test/Makefile b/test/Makefile
+index dcdad7c..eccc91c 100644
+--- a/test/Makefile
++++ b/test/Makefile
+@@ -1,45 +1,25 @@
+-# Makefile
+-# See https://docs.cocotb.org/en/stable/quickstart.html for more info
++# TinyTapeout Fur Elise FM Testbench Makefile
+ 
+-# defaults
+-SIM ?= icarus
+-FST ?= -fst # Use more efficient FST format
+-TOPLEVEL_LANG ?= verilog
+-SRC_DIR = $(PWD)/../src
+-PROJECT_SOURCES = project.v
++IVERILOG = iverilog
++VVP = vvp
++GTKWAVE = gtkwave
+ 
+-ifneq ($(GATES),yes)
++SRC_DIR = ../src
++TB = tb.v
++SRC_FILES = $(wildcard $(SRC_DIR)/*.v)
+ 
+-# RTL simulation:
+-SIM_BUILD				= sim_build/rtl
+-VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES))
++all: sim
+ 
+-else
++sim: tb
++	$(VVP) tb
+ 
+-# Gate level simulation:
+-SIM_BUILD				= sim_build/gl
+-COMPILE_ARGS    += -DGL_TEST
+-COMPILE_ARGS    += -DFUNCTIONAL
+-COMPILE_ARGS    += -DUSE_POWER_PINS
+-COMPILE_ARGS    += -DSIM
+-COMPILE_ARGS    += -DUNIT_DELAY=\#1
+-VERILOG_SOURCES += $(PDK_ROOT)/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/verilog/primitives.v
+-VERILOG_SOURCES += $(PDK_ROOT)/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/verilog/gf180mcu_fd_sc_mcu7t5v0.v
++tb: $(TB) $(SRC_FILES)
++	$(IVERILOG) -o tb $(TB) $(SRC_FILES)
+ 
+-# this gets copied in by the GDS action workflow
+-VERILOG_SOURCES += $(PWD)/gate_level_netlist.v
++wave: sim
++	$(GTKWAVE) tb.vcd &
+ 
+-endif
++clean:
++	rm -f tb tb.vcd
+ 
+-# Allow sharing configuration between design and testbench via `include`:
+-COMPILE_ARGS 		+= -I$(SRC_DIR)
+-
+-# Include the testbench sources:
+-VERILOG_SOURCES += $(PWD)/tb.v
+-TOPLEVEL = tb
+-
+-# List test modules to run, separated by commas and without the .py suffix:
+-COCOTB_TEST_MODULES = test
+-
+-# include cocotb's make rules to take care of the simulator setup
+-include $(shell cocotb-config --makefiles)/Makefile.sim
++.PHONY: all sim wave clean
+diff --git a/test/tb.v b/test/tb.v
+index c9f37ee..bf23d86 100644
+--- a/test/tb.v
++++ b/test/tb.v
+@@ -1,49 +1,253 @@
++/*
++ * Copyright (c) 2024 Your Name
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
+ `default_nettype none
+ `timescale 1ns / 1ps
+ 
+-/* This testbench just instantiates the module and makes some convenient wires
+-   that can be driven / tested by the cocotb test.py.
+-*/
+-module tb ();
+-
+-  // Dump the signals to a FST file. You can view it with gtkwave or surfer.
+-  initial begin
+-    $dumpfile("tb.fst");
+-    $dumpvars(0, tb);
+-    #1;
+-  end
+-
+-  // Wire up the inputs and outputs:
+-  reg clk;
+-  reg rst_n;
+-  reg ena;
+-  reg [7:0] ui_in;
+-  reg [7:0] uio_in;
+-  wire [7:0] uo_out;
+-  wire [7:0] uio_out;
+-  wire [7:0] uio_oe;
+-`ifdef GL_TEST
+-  wire VPWR = 1'b1;
+-  wire VGND = 1'b0;
+-`endif
+-
+-  // Replace tt_um_example with your module name:
+-  tt_um_example user_project (
+-
+-      // Include power ports for the Gate Level test:
+-`ifdef GL_TEST
+-      .VPWR(VPWR),
+-      .VGND(VGND),
+-`endif
+-
+-      .ui_in  (ui_in),    // Dedicated inputs
+-      .uo_out (uo_out),   // Dedicated outputs
+-      .uio_in (uio_in),   // IOs: Input path
+-      .uio_out(uio_out),  // IOs: Output path
+-      .uio_oe (uio_oe),   // IOs: Enable path (active high: 0=input, 1=output)
+-      .ena    (ena),      // enable - goes high when design is selected
+-      .clk    (clk),      // clock
+-      .rst_n  (rst_n)     // not reset
+-  );
++//-----------------------------------------------------------------------------
++// Testbench: tb
++//
++// Description:
++//   TinyTapeout testbench for Für Elise FM transmitter.
++//
++// Usage:
++//   iverilog -o tb tb.v ../src/*.v
++//   vvp tb
++//   gtkwave tb.vcd
++//-----------------------------------------------------------------------------
++
++module tb;
++
++    //=========================================================================
++    // Test Parameters
++    //=========================================================================
++    localparam CLK_PERIOD_NS = 20;  // 50 MHz clock
++
++    //=========================================================================
++    // DUT Signals
++    //=========================================================================
++    reg         clk;
++    reg         rst_n;
++    reg         ena;
++    reg  [7:0]  ui_in;
++    wire [7:0]  uo_out;
++    reg  [7:0]  uio_in;
++    wire [7:0]  uio_out;
++    wire [7:0]  uio_oe;
++
++    //=========================================================================
++    // DUT Instantiation
++    //=========================================================================
++    tt_um_tone_fm_tx dut (
++        .ui_in   (ui_in),
++        .uo_out  (uo_out),
++        .uio_in  (uio_in),
++        .uio_out (uio_out),
++        .uio_oe  (uio_oe),
++        .ena     (ena),
++        .clk     (clk),
++        .rst_n   (rst_n)
++    );
++
++    //=========================================================================
++    // Clock Generation
++    //=========================================================================
++    initial clk = 0;
++    always #(CLK_PERIOD_NS/2) clk = ~clk;
++
++    //=========================================================================
++    // Signal Aliases for Readability
++    //=========================================================================
++    wire fm_out     = uo_out[0];
++    wire audio_out  = uo_out[1];
++    wire playing    = uo_out[2];
++    wire melody_end = uo_out[3];
++    wire [3:0] note_idx = uo_out[7:4];
++    wire [7:0] phase_msb = uio_out;
++
++    //=========================================================================
++    // Output Monitoring
++    //=========================================================================
++    reg fm_out_prev;
++    integer fm_transitions;
++
++    always @(posedge clk) begin
++        fm_out_prev <= fm_out;
++        if (fm_out && !fm_out_prev)
++            fm_transitions <= fm_transitions + 1;
++    end
++
++    //=========================================================================
++    // Helper Tasks
++    //=========================================================================
++    task reset_dut;
++        begin
++            rst_n = 0;
++            ena = 0;
++            ui_in = 8'h00;
++            uio_in = 8'h00;
++            fm_transitions = 0;
++            #100;
++            rst_n = 1;
++            ena = 1;
++            #100;
++        end
++    endtask
++
++    task wait_clocks;
++        input integer num_clocks;
++        begin
++            repeat (num_clocks) @(posedge clk);
++        end
++    endtask
++
++    //=========================================================================
++    // Test Sequence
++    //=========================================================================
++    integer test_passed;
++
++    initial begin
++        $dumpfile("tb.vcd");
++        $dumpvars(0, tb);
++
++        test_passed = 1;
++
++        $display("");
++        $display("================================================");
++        $display("TinyTapeout Fur Elise FM Testbench");
++        $display("================================================");
++        $display("");
++
++        //---------------------------------------------------------------------
++        // Test 1: Reset Behavior
++        //---------------------------------------------------------------------
++        $display("[TEST 1] Reset behavior...");
++        reset_dut();
++
++        if (playing !== 0) begin
++            $display("  FAIL: playing should be 0 after reset (enable=0)");
++            test_passed = 0;
++        end else begin
++            $display("  PASS: Clean reset state");
++        end
++
++        //---------------------------------------------------------------------
++        // Test 2: Enable Playback
++        //---------------------------------------------------------------------
++        $display("[TEST 2] Enable playback...");
++        reset_dut();
++        ui_in[0] = 1;  // enable
++        ui_in[1] = 1;  // loop
++
++        wait_clocks(5000);
++
++        if (!playing) begin
++            $display("  FAIL: Should be playing melody");
++            test_passed = 0;
++        end else begin
++            $display("  PASS: Melody playback active");
++            $display("  Phase MSB: 0x%02X", phase_msb);
++        end
++
++        //---------------------------------------------------------------------
++        // Test 3: FM Output Activity
++        //---------------------------------------------------------------------
++        $display("[TEST 3] FM output activity...");
++        fm_transitions = 0;
++        wait_clocks(10000);
++
++        if (fm_transitions > 0) begin
++            $display("  PASS: FM output toggling (%0d transitions)", fm_transitions);
++        end else begin
++            $display("  FAIL: No FM output transitions");
++            test_passed = 0;
++        end
++
++        //---------------------------------------------------------------------
++        // Test 4: Clock Doubling
++        //---------------------------------------------------------------------
++        $display("[TEST 4] Clock doubling...");
++        reset_dut();
++        ui_in[0] = 1;  // enable
++        ui_in[2] = 1;  // clk_2x_enable
++
++        fm_transitions = 0;
++        wait_clocks(10000);
++        $display("  FM transitions with 2x clock: %0d", fm_transitions);
++
++        //---------------------------------------------------------------------
++        // Test 5: Audio Output
++        //---------------------------------------------------------------------
++        $display("[TEST 5] Audio output...");
++        reset_dut();
++        ui_in[0] = 1;  // enable
++
++        begin : audio_test
++            integer audio_transitions;
++            reg audio_prev;
++            audio_transitions = 0;
++            audio_prev = 0;
++
++            repeat (50000) begin
++                @(posedge clk);
++                if (audio_out && !audio_prev)
++                    audio_transitions = audio_transitions + 1;
++                audio_prev = audio_out;
++            end
++
++            if (audio_transitions > 0) begin
++                $display("  PASS: Audio output active (%0d transitions)", audio_transitions);
++            end else begin
++                $display("  WARN: No audio transitions detected");
++            end
++        end
++
++        //---------------------------------------------------------------------
++        // Test 6: Loop Mode
++        //---------------------------------------------------------------------
++        $display("[TEST 6] Loop mode...");
++        reset_dut();
++        ui_in[0] = 1;  // enable
++        ui_in[1] = 1;  // loop
++
++        @(posedge melody_end);
++        $display("  First melody_end detected");
++
++        wait_clocks(5000);
++
++        if (!playing) begin
++            $display("  FAIL: Should still be playing in loop mode");
++            test_passed = 0;
++        end else begin
++            $display("  PASS: Loop mode continues playback");
++        end
++
++        //---------------------------------------------------------------------
++        // Test Summary
++        //---------------------------------------------------------------------
++        $display("");
++        $display("================================================");
++        if (test_passed) begin
++            $display("ALL TESTS PASSED");
++        end else begin
++            $display("SOME TESTS FAILED");
++        end
++        $display("================================================");
++        $display("");
++
++        wait_clocks(1000);
++        $finish;
++    end
++
++    //=========================================================================
++    // Timeout Watchdog
++    //=========================================================================
++    initial begin
++        #50_000_000;  // 50ms timeout
++        $display("TIMEOUT: Simulation took too long");
++        $finish;
++    end
+ 
+ endmodule
+-- 
+2.43.0
+
