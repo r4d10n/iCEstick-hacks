@@ -1,9 +1,17 @@
 # ECP5 Constraints for Fur Elise FM Transmitter
 # Target: Vahya Mini ECP5 board (ECP5-25 caBGA256)
 # Reference: https://github.com/r4d10n/vahya
+#
+# ESSENTIAL PINS ONLY:
+#   - fm_out at C10
+#   - audio_out at D13
+#   - clk, rst_n, ena
+#
+# All other pins (ui_in, uo_out[2-7], uio_*) are assigned to valid
+# but arbitrary locations - they should NOT be connected on the board.
 
 #=============================================================================
-# Clock and Reset
+# ESSENTIAL PINS - Clock, Reset, Enable
 #=============================================================================
 LOCATE COMP "clk" SITE "J14";      # 26 MHz clock input (Vahya Mini)
 IOBUF PORT "clk" IO_TYPE=LVCMOS33;
@@ -12,138 +20,126 @@ FREQUENCY PORT "clk" 26 MHZ;
 LOCATE COMP "rst_n" SITE "N6";     # Reset button (active low, Vahya Mini)
 IOBUF PORT "rst_n" IO_TYPE=LVCMOS33 PULLMODE=DOWN DRIVE=4;
 
-#=============================================================================
-# Enable Signal
-#=============================================================================
-LOCATE COMP "ena" SITE "P1";       # Enable (tied high or switch)
+LOCATE COMP "ena" SITE "P1";       # Enable signal
 IOBUF PORT "ena" IO_TYPE=LVCMOS33 PULLMODE=UP;
 
 #=============================================================================
-# Input Signals (ui_in[7:0])
+# ESSENTIAL OUTPUTS - FM and Audio
 #=============================================================================
-# Note: These inputs can be left unconnected for standalone operation
-# Using valid caBGA256 pins
-LOCATE COMP "ui_in[0]" SITE "A2";  # enable (optional)
-IOBUF PORT "ui_in[0]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
-
-LOCATE COMP "ui_in[1]" SITE "A3";  # loop (optional)
-IOBUF PORT "ui_in[1]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
-
-LOCATE COMP "ui_in[2]" SITE "A4";  # clk_2x_enable (optional)
-IOBUF PORT "ui_in[2]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
-
-LOCATE COMP "ui_in[3]" SITE "A5";  # pwm_in (optional)
-IOBUF PORT "ui_in[3]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
-
-LOCATE COMP "ui_in[4]" SITE "B3";  # reserved (not connected)
-IOBUF PORT "ui_in[4]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
-
-LOCATE COMP "ui_in[5]" SITE "B4";  # reserved (not connected)
-IOBUF PORT "ui_in[5]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
-
-LOCATE COMP "ui_in[6]" SITE "B5";  # reserved (not connected)
-IOBUF PORT "ui_in[6]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
-
-LOCATE COMP "ui_in[7]" SITE "B6";  # reserved (not connected)
-IOBUF PORT "ui_in[7]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
-
-#=============================================================================
-# Output Signals (uo_out[7:0])
-#=============================================================================
-# Primary outputs for Vahya Mini ECP5
-LOCATE COMP "uo_out[0]" SITE "C10";  # fm_out (connect to antenna) - Vahya Mini GPIO
+LOCATE COMP "uo_out[0]" SITE "C10";  # fm_out - CONNECT TO ANTENNA/RF CIRCUIT
 IOBUF PORT "uo_out[0]" IO_TYPE=LVCMOS33 DRIVE=4;
 
-LOCATE COMP "uo_out[1]" SITE "D13";  # audio_out (connect to speaker/amp) - Vahya Mini GPIO
+LOCATE COMP "uo_out[1]" SITE "D13";  # audio_out - CONNECT TO SPEAKER/AMP
 IOBUF PORT "uo_out[1]" IO_TYPE=LVCMOS33 DRIVE=4;
 
-# Optional status outputs (not connected)
-LOCATE COMP "uo_out[2]" SITE "C6";  # playing (LED indicator - optional)
+#=============================================================================
+# UNUSED PINS - Assigned to valid pins but DO NOT CONNECT
+#=============================================================================
+# These pins exist in the Verilog module but are not needed for operation
+# They are assigned to valid caBGA256 pins for synthesis/P&R purposes only
+
+# Unused inputs (ui_in[7:0]) - NOT CONNECTED
+LOCATE COMP "ui_in[0]" SITE "A2";
+LOCATE COMP "ui_in[1]" SITE "A3";
+LOCATE COMP "ui_in[2]" SITE "A4";
+LOCATE COMP "ui_in[3]" SITE "A5";
+LOCATE COMP "ui_in[4]" SITE "B3";
+LOCATE COMP "ui_in[5]" SITE "B4";
+LOCATE COMP "ui_in[6]" SITE "B5";
+LOCATE COMP "ui_in[7]" SITE "B6";
+IOBUF PORT "ui_in[0]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+IOBUF PORT "ui_in[1]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+IOBUF PORT "ui_in[2]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+IOBUF PORT "ui_in[3]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+IOBUF PORT "ui_in[4]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+IOBUF PORT "ui_in[5]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+IOBUF PORT "ui_in[6]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+IOBUF PORT "ui_in[7]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
+
+# Unused outputs (uo_out[7:2]) - NOT CONNECTED
+LOCATE COMP "uo_out[2]" SITE "C6";
+LOCATE COMP "uo_out[3]" SITE "C7";
+LOCATE COMP "uo_out[4]" SITE "C8";
+LOCATE COMP "uo_out[5]" SITE "C9";
+LOCATE COMP "uo_out[6]" SITE "D6";
+LOCATE COMP "uo_out[7]" SITE "D7";
 IOBUF PORT "uo_out[2]" IO_TYPE=LVCMOS33 DRIVE=4;
-
-LOCATE COMP "uo_out[3]" SITE "C7";  # melody_end (LED indicator - optional)
 IOBUF PORT "uo_out[3]" IO_TYPE=LVCMOS33 DRIVE=4;
-
-LOCATE COMP "uo_out[4]" SITE "C8";  # note_index[0] (debug LED - optional)
 IOBUF PORT "uo_out[4]" IO_TYPE=LVCMOS33 DRIVE=4;
-
-LOCATE COMP "uo_out[5]" SITE "C9";  # note_index[1] (debug LED - optional)
 IOBUF PORT "uo_out[5]" IO_TYPE=LVCMOS33 DRIVE=4;
-
-LOCATE COMP "uo_out[6]" SITE "D6";  # note_index[2] (debug LED - optional)
 IOBUF PORT "uo_out[6]" IO_TYPE=LVCMOS33 DRIVE=4;
-
-LOCATE COMP "uo_out[7]" SITE "D7";  # note_index[3] (debug LED - optional)
 IOBUF PORT "uo_out[7]" IO_TYPE=LVCMOS33 DRIVE=4;
 
-#=============================================================================
-# Bidirectional Signals (uio_in/out/oe[7:0])
-#=============================================================================
-# GPIO headers for debug (phase increment output) - optional, not connected
-# Using valid caBGA256 pins
+# Unused bidirectional pins (uio_*[7:0]) - NOT CONNECTED
 LOCATE COMP "uio_in[0]" SITE "E6";
-LOCATE COMP "uio_out[0]" SITE "E6";
-LOCATE COMP "uio_oe[0]" SITE "E6";
-IOBUF PORT "uio_in[0]" IO_TYPE=LVCMOS33;
-IOBUF PORT "uio_out[0]" IO_TYPE=LVCMOS33 DRIVE=4;
-IOBUF PORT "uio_oe[0]" IO_TYPE=LVCMOS33;
-
 LOCATE COMP "uio_in[1]" SITE "E7";
-LOCATE COMP "uio_out[1]" SITE "E7";
-LOCATE COMP "uio_oe[1]" SITE "E7";
-IOBUF PORT "uio_in[1]" IO_TYPE=LVCMOS33;
-IOBUF PORT "uio_out[1]" IO_TYPE=LVCMOS33 DRIVE=4;
-IOBUF PORT "uio_oe[1]" IO_TYPE=LVCMOS33;
-
 LOCATE COMP "uio_in[2]" SITE "E8";
-LOCATE COMP "uio_out[2]" SITE "E8";
-LOCATE COMP "uio_oe[2]" SITE "E8";
-IOBUF PORT "uio_in[2]" IO_TYPE=LVCMOS33;
-IOBUF PORT "uio_out[2]" IO_TYPE=LVCMOS33 DRIVE=4;
-IOBUF PORT "uio_oe[2]" IO_TYPE=LVCMOS33;
-
 LOCATE COMP "uio_in[3]" SITE "E9";
-LOCATE COMP "uio_out[3]" SITE "E9";
-LOCATE COMP "uio_oe[3]" SITE "E9";
-IOBUF PORT "uio_in[3]" IO_TYPE=LVCMOS33;
-IOBUF PORT "uio_out[3]" IO_TYPE=LVCMOS33 DRIVE=4;
-IOBUF PORT "uio_oe[3]" IO_TYPE=LVCMOS33;
-
 LOCATE COMP "uio_in[4]" SITE "F6";
-LOCATE COMP "uio_out[4]" SITE "F6";
-LOCATE COMP "uio_oe[4]" SITE "F6";
-IOBUF PORT "uio_in[4]" IO_TYPE=LVCMOS33;
-IOBUF PORT "uio_out[4]" IO_TYPE=LVCMOS33 DRIVE=4;
-IOBUF PORT "uio_oe[4]" IO_TYPE=LVCMOS33;
-
 LOCATE COMP "uio_in[5]" SITE "F7";
-LOCATE COMP "uio_out[5]" SITE "F7";
-LOCATE COMP "uio_oe[5]" SITE "F7";
-IOBUF PORT "uio_in[5]" IO_TYPE=LVCMOS33;
-IOBUF PORT "uio_out[5]" IO_TYPE=LVCMOS33 DRIVE=4;
-IOBUF PORT "uio_oe[5]" IO_TYPE=LVCMOS33;
-
 LOCATE COMP "uio_in[6]" SITE "F8";
-LOCATE COMP "uio_out[6]" SITE "F8";
-LOCATE COMP "uio_oe[6]" SITE "F8";
-IOBUF PORT "uio_in[6]" IO_TYPE=LVCMOS33;
-IOBUF PORT "uio_out[6]" IO_TYPE=LVCMOS33 DRIVE=4;
-IOBUF PORT "uio_oe[6]" IO_TYPE=LVCMOS33;
-
 LOCATE COMP "uio_in[7]" SITE "F9";
+
+LOCATE COMP "uio_out[0]" SITE "E6";
+LOCATE COMP "uio_out[1]" SITE "E7";
+LOCATE COMP "uio_out[2]" SITE "E8";
+LOCATE COMP "uio_out[3]" SITE "E9";
+LOCATE COMP "uio_out[4]" SITE "F6";
+LOCATE COMP "uio_out[5]" SITE "F7";
+LOCATE COMP "uio_out[6]" SITE "F8";
 LOCATE COMP "uio_out[7]" SITE "F9";
+
+LOCATE COMP "uio_oe[0]" SITE "E6";
+LOCATE COMP "uio_oe[1]" SITE "E7";
+LOCATE COMP "uio_oe[2]" SITE "E8";
+LOCATE COMP "uio_oe[3]" SITE "E9";
+LOCATE COMP "uio_oe[4]" SITE "F6";
+LOCATE COMP "uio_oe[5]" SITE "F7";
+LOCATE COMP "uio_oe[6]" SITE "F8";
 LOCATE COMP "uio_oe[7]" SITE "F9";
+
+IOBUF PORT "uio_in[0]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_in[1]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_in[2]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_in[3]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_in[4]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_in[5]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_in[6]" IO_TYPE=LVCMOS33;
 IOBUF PORT "uio_in[7]" IO_TYPE=LVCMOS33;
+
+IOBUF PORT "uio_out[0]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_out[1]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_out[2]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_out[3]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_out[4]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_out[5]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "uio_out[6]" IO_TYPE=LVCMOS33 DRIVE=4;
 IOBUF PORT "uio_out[7]" IO_TYPE=LVCMOS33 DRIVE=4;
+
+IOBUF PORT "uio_oe[0]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_oe[1]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_oe[2]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_oe[3]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_oe[4]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_oe[5]" IO_TYPE=LVCMOS33;
+IOBUF PORT "uio_oe[6]" IO_TYPE=LVCMOS33;
 IOBUF PORT "uio_oe[7]" IO_TYPE=LVCMOS33;
 
 #=============================================================================
-# Notes:
-# - This configuration is for Vahya Mini ECP5 board (ECP5-25 caBGA256)
-# - Primary outputs: fm_out at C10, audio_out at D13
-# - Clock: 26 MHz at J14 (Vahya Mini standard)
-# - Reset: N6 (Vahya Mini reset button)
-# - Most inputs/outputs can remain unconnected for standalone FM transmitter operation
-# - Pin assignments updated for valid caBGA256 package pins
-# - Reference: https://github.com/r4d10n/vahya
+# SUMMARY FOR VAHYA MINI ECP5 BOARD
+#=============================================================================
+# CONNECT THESE PINS:
+#   - C10  : fm_out (FM modulated output to antenna/RF circuit)
+#   - D13  : audio_out (audio frequency output to speaker/amp)
+#   - J14  : 26 MHz clock
+#   - N6   : Reset button (active low)
+#   - P1   : Enable (optional, can tie high)
+#
+# DO NOT CONNECT:
+#   - All ui_in[7:0] pins
+#   - All uo_out[7:2] pins
+#   - All uio_* pins
+#
+# These unused pins are assigned internally but should remain
+# physically unconnected on the board.
 #=============================================================================

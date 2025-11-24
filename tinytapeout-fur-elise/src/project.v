@@ -9,44 +9,48 @@
 // Module: tt_um_fur_elise_fm
 //
 // Description:
-//   TinyTapeout wrapper for Für Elise FM transmitter.
+//   Simplified wrapper for Für Elise FM transmitter for Vahya Mini ECP5.
 //   Plays Beethoven's "Für Elise" melody via FM modulation.
 //
-// Pin Mapping:
-//   ui_in[0]   = enable      - Enable playback
-//   ui_in[1]   = loop        - Loop melody continuously
-//   ui_in[2]   = clk_2x_en   - Enable clock doubling
-//   ui_in[3]   = pwm_in      - External PWM audio input
-//   ui_in[7:4] = reserved
+//   VAHYA MINI CONFIGURATION:
+//   - Standalone mode: automatically plays on power-up
+//   - Loops continuously
+//   - Only fm_out (C10) and audio_out (D13) are used
+//   - All ui_in, uo_out[2-7], and uio_* pins are present but unused
 //
-//   uo_out[0]  = fm_out      - FM modulated RF output
-//   uo_out[1]  = audio_out   - Audio frequency output (speaker)
-//   uo_out[2]  = playing     - Melody currently playing
-//   uo_out[3]  = melody_end  - Pulse at end of melody
-//   uo_out[7:4]= note_index[3:0] - Current note index (debug)
+// Essential Pins:
+//   clk        = 26 MHz clock (J14 on Vahya Mini)
+//   rst_n      = Reset (N6 on Vahya Mini)
+//   ena        = Enable (P1 on Vahya Mini, can tie high)
+//   uo_out[0]  = fm_out (C10) - FM modulated RF output
+//   uo_out[1]  = audio_out (D13) - Audio frequency output
 //
-//   uio[7:0]   = phase_inc[31:24] - Phase increment MSB (output mode)
+// Unused Pins (internally assigned but not connected):
+//   ui_in[7:0]   - All inputs tied to defaults
+//   uo_out[7:2]  - Status outputs (unused)
+//   uio[7:0]     - Bidirectional pins (unused)
 //
 //-----------------------------------------------------------------------------
 
 module tt_um_fur_elise_fm (
-    input  wire [7:0] ui_in,    // Dedicated inputs
-    output wire [7:0] uo_out,   // Dedicated outputs
-    input  wire [7:0] uio_in,   // IOs: Input path
-    output wire [7:0] uio_out,  // IOs: Output path
-    output wire [7:0] uio_oe,   // IOs: Enable path (active high: 0=input, 1=output)
-    input  wire       ena,      // always 1 when the design is powered, so you can ignore it
-    input  wire       clk,      // clock
-    input  wire       rst_n     // reset_n - low to reset
+    input  wire [7:0] ui_in,    // Dedicated inputs (unused, tied to defaults)
+    output wire [7:0] uo_out,   // Dedicated outputs (only [1:0] used)
+    input  wire [7:0] uio_in,   // IOs: Input path (unused)
+    output wire [7:0] uio_out,  // IOs: Output path (unused)
+    output wire [7:0] uio_oe,   // IOs: Enable path (unused)
+    input  wire       ena,      // Enable signal
+    input  wire       clk,      // 26 MHz clock
+    input  wire       rst_n     // Reset (active low)
 );
 
     //=========================================================================
-    // Input Mapping
+    // Standalone Configuration
     //=========================================================================
-    wire enable      = ui_in[0] & ena;
-    wire loop        = ui_in[1];
-    wire clk_2x_en   = ui_in[2];
-    wire pwm_in      = ui_in[3];
+    // For Vahya Mini: enable on power-up, loop continuously, no external inputs
+    wire enable      = ena;          // Always enabled when powered
+    wire loop        = 1'b1;         // Loop melody continuously
+    wire clk_2x_en   = 1'b0;         // No clock doubling (26 MHz is sufficient)
+    wire pwm_in      = 1'b0;         // No external PWM input
 
     //=========================================================================
     // Internal Signals
@@ -62,8 +66,8 @@ module tt_um_fur_elise_fm (
     // Für Elise FM Transmitter Core
     //=========================================================================
     fur_elise_fm_top #(
-        .CLK_FREQ_HZ(50_000_000),           // TinyTapeout clock is ~50 MHz
-        .CLOCKS_PER_16TH(50_000_000 / 8),   // 120 BPM
+        .CLK_FREQ_HZ(26_000_000),           // Vahya Mini clock is 26 MHz
+        .CLOCKS_PER_16TH(26_000_000 / 8),   // 120 BPM (26M / 8 clocks per 1/16th note)
         .MELODY_LENGTH(82),
         .PWM_FREQ_HZ(50_000)
     ) u_fur_elise (
@@ -84,17 +88,20 @@ module tt_um_fur_elise_fm (
     //=========================================================================
     // Output Mapping
     //=========================================================================
-    assign uo_out[0] = fm_out;
-    assign uo_out[1] = audio_out;
-    assign uo_out[2] = playing;
-    assign uo_out[3] = melody_end;
-    assign uo_out[7:4] = note_index[3:0];
+    // ESSENTIAL OUTPUTS (Connect to board)
+    assign uo_out[0] = fm_out;       // C10: FM output to antenna/RF
+    assign uo_out[1] = audio_out;    // D13: Audio output to speaker
 
-    // Bidirectional IOs used as outputs for phase increment MSB
-    assign uio_out = phase_inc_out[31:24];
-    assign uio_oe  = 8'hFF;  // All outputs
+    // UNUSED OUTPUTS (Do not connect - for internal signals only)
+    assign uo_out[2] = playing;      // Not connected
+    assign uo_out[3] = melody_end;   // Not connected
+    assign uo_out[7:4] = note_index[3:0]; // Not connected
+
+    // UNUSED BIDIRECTIONAL IOs (Do not connect)
+    assign uio_out = phase_inc_out[31:24];  // Not connected
+    assign uio_oe  = 8'hFF;  // All outputs (but not connected)
 
     // Suppress unused input warnings
-    wire _unused = &{uio_in, note_index[6:4], 1'b0};
+    wire _unused = &{ui_in, uio_in, note_index[6:4], 1'b0};
 
 endmodule
